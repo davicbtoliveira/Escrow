@@ -4,7 +4,11 @@ from unittest.mock import MagicMock, call, patch
 
 from django.test import SimpleTestCase, override_settings
 
-from escrow.integrations.rate_limit import TOKEN_BUCKET_SCRIPT, check_api_key_rate_limit
+from escrow.integrations.rate_limit import (
+    TOKEN_BUCKET_SCRIPT,
+    check_api_key_rate_limit,
+    check_webhook_rate_limit,
+)
 
 
 class RedisRateLimitTests(SimpleTestCase):
@@ -47,3 +51,17 @@ class RedisRateLimitTests(SimpleTestCase):
             ),
         ]
         client.incr.assert_not_called()
+
+    @override_settings(WEBHOOK_RATE_LIMIT_MAX=600, WEBHOOK_RATE_LIMIT_WINDOW_SECONDS=60)
+    @patch("escrow.integrations.rate_limit.redis.Redis.from_url")
+    def test_webhook_bucket_hashes_its_untrusted_source(self, from_url: MagicMock) -> None:
+        client = MagicMock()
+        client.eval.return_value = [1, 0]
+        from_url.return_value = client
+
+        decision = check_webhook_rate_limit("198.51.100.20", now_timestamp=120)
+
+        assert decision.allowed
+        redis_key = client.eval.call_args.args[2]
+        assert redis_key.startswith("rate-limit:webhook:")
+        assert "198.51.100.20" not in redis_key

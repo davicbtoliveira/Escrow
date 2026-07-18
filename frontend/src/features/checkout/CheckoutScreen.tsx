@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { ApiError, checkoutApi, type PublicCheckout } from "../../lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, checkoutApi, type PixChargeResponse, type PublicCheckout } from "../../lib/api";
 
 type CheckoutScreenProps = {
   token: string;
@@ -14,18 +14,28 @@ type CheckoutState =
 type CheckoutStatus = {
   detail: string;
   label: string;
-  tone: "held" | "pending" | "review" | "released";
+  tone: "held" | "pending" | "rejected" | "released" | "review";
+};
+
+type PixCharge = PixChargeResponse["pix"];
+
+type CheckoutPayment = NonNullable<PublicCheckout["payment"]>;
+
+type CheckoutStatusEvent = {
+  agreementId: string;
+  sequence: number;
+  status: string;
 };
 
 const checkoutStatus: Record<string, CheckoutStatus> = {
   AWAITING_PAYMENT: {
     label: "Aguardando pagamento PIX",
-    detail: "O acordo será enviado para análise assim que o pagamento for confirmado.",
+    detail: "Gere o código PIX para iniciar o pagamento protegido.",
     tone: "pending",
   },
   PENDING_FUNDING: {
     label: "Aguardando pagamento PIX",
-    detail: "O acordo será enviado para análise assim que o pagamento for confirmado.",
+    detail: "Gere o código PIX para iniciar o pagamento protegido.",
     tone: "pending",
   },
   FUNDING_PROCESSING: {
@@ -38,6 +48,11 @@ const checkoutStatus: Record<string, CheckoutStatus> = {
     detail: "O pagamento foi recebido e está passando pela análise de segurança.",
     tone: "review",
   },
+  REVIEW_REQUIRED: {
+    label: "Análise de risco necessária",
+    detail: "A equipe de risco está revisando este pagamento antes da custódia.",
+    tone: "review",
+  },
   HELD: {
     label: "Valor protegido em custódia",
     detail: "O pagamento foi aprovado e permanece protegido até a confirmação de entrega.",
@@ -47,6 +62,11 @@ const checkoutStatus: Record<string, CheckoutStatus> = {
     label: "Valor protegido em custódia",
     detail: "O pagamento foi aprovado e permanece protegido até a confirmação de entrega.",
     tone: "held",
+  },
+  FUNDING_REJECTED: {
+    label: "Pagamento não aprovado",
+    detail: "O valor não foi colocado em custódia. Solicite uma nova orientação à organização.",
+    tone: "rejected",
   },
   RELEASED: {
     label: "Valor liberado",
@@ -68,7 +88,11 @@ function checkoutStep(status: string): number {
   if (status === "HELD_IN_ESCROW" || status === "HELD") {
     return 2;
   }
-  if (status === "PENDING_RISK_REVIEW" || status === "FUNDING_PROCESSING") {
+  if (
+    status === "PENDING_RISK_REVIEW" ||
+    status === "FUNDING_PROCESSING" ||
+    status === "REVIEW_REQUIRED"
+  ) {
     return 1;
   }
   return 0;
@@ -111,28 +135,269 @@ function deliveryWindow(copy: PublicCheckout["agreement"]): string {
   return `${copy.delivery_window_days} dias após a confirmação do pagamento`;
 }
 
+function paymentFor(checkout: PublicCheckout): CheckoutPayment | undefined {
+  return checkout.payment;
+}
+
+function sequenceFor(checkout: PublicCheckout): number | undefined {
+  const sequence = checkout.agreement.realtime_sequence;
+  return typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence >= 0
+    ? sequence
+    : undefined;
+}
+
+function parseStatusEvent(value: unknown): CheckoutStatusEvent | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    const event = parsed as Record<string, unknown>;
+    if (
+      typeof event.agreement_id !== "string" ||
+      typeof event.status !== "string" ||
+      typeof event.sequence !== "number" ||
+      !Number.isSafeInteger(event.sequence) ||
+      event.sequence < 1
+    ) {
+      return undefined;
+    }
+    return {
+      agreementId: event.agreement_id,
+      sequence: event.sequence,
+      status: event.status,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function checkoutSocketUrl(token: string): string {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${protocol}://${window.location.host}/ws/checkout/${encodeURIComponent(token)}/`;
+}
+
+function isTerminalStatus(status: string): boolean {
+  return ["FUNDING_REJECTED", "CANCELLED", "REFUNDED", "RELEASED"].includes(status);
+}
+
+function isProcessingStatus(status: string): boolean {
+  return ["FUNDING_PROCESSING", "PENDING_RISK_REVIEW", "REVIEW_REQUIRED"].includes(status);
+}
+
+function idempotencyStorageKey(token: string): string {
+  return `escrow.pix.idempotency.${token}`;
+}
+
+function newIdempotencyKey(): string {
+  const secureCrypto = globalThis.crypto;
+  if (typeof secureCrypto?.randomUUID !== "function") {
+    throw new Error("Secure random values are unavailable.");
+  }
+  return `pix:${secureCrypto.randomUUID()}`;
+}
+
+function pixIdempotencyKey(token: string): string {
+  const storageKey = idempotencyStorageKey(token);
+  try {
+    const existing = window.sessionStorage.getItem(storageKey);
+    if (existing) {
+      return existing;
+    }
+
+    const key = newIdempotencyKey();
+    window.sessionStorage.setItem(storageKey, key);
+    return key;
+  } catch {
+    return newIdempotencyKey();
+  }
+}
+
+async function createPixCharge(token: string, idempotencyKey: string): Promise<PixChargeResponse> {
+  return checkoutApi.createPixCharge(token, idempotencyKey);
+}
+
 export function CheckoutScreen({ token }: CheckoutScreenProps) {
   const [state, setState] = useState<CheckoutState>({ status: "loading" });
+  const [creatingPix, setCreatingPix] = useState(false);
+  const [pix, setPix] = useState<PixCharge | undefined>();
+  const [pixError, setPixError] = useState<string | undefined>();
+  const [copyFeedback, setCopyFeedback] = useState<string | undefined>();
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const lastSequence = useRef<number | undefined>(undefined);
 
-  const loadCheckout = useCallback(async () => {
-    setState({ status: "loading" });
-
-    try {
-      const checkout = await checkoutApi.get(token);
-      setState({ status: "ready", checkout });
-    } catch (error) {
-      if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
-        setState({ status: "not-found" });
-        return;
+  const loadCheckout = useCallback(
+    async (mode: "initial" | "refresh" = "initial") => {
+      if (mode === "initial") {
+        setState({ status: "loading" });
       }
 
-      setState({ status: "error" });
-    }
-  }, [token]);
+      try {
+        const checkout = await checkoutApi.get(token);
+        const sequence = sequenceFor(checkout);
+        if (sequence !== undefined) {
+          lastSequence.current = sequence;
+        }
+        setState({ status: "ready", checkout });
+      } catch (error) {
+        if (mode === "refresh") {
+          return;
+        }
+        if (error instanceof ApiError && (error.status === 404 || error.status === 410)) {
+          setState({ status: "not-found" });
+          return;
+        }
+
+        setState({ status: "error" });
+      }
+    },
+    [token],
+  );
 
   useEffect(() => {
+    lastSequence.current = undefined;
+    setPix(undefined);
+    setPixError(undefined);
+    setCopyFeedback(undefined);
     void loadCheckout();
   }, [loadCheckout]);
+
+  const agreement = state.status === "ready" ? state.checkout.agreement : undefined;
+  const agreementId = agreement?.id;
+  const shouldSubscribe = Boolean(agreement && !isTerminalStatus(agreement.status));
+  const shouldPoll = Boolean(
+    agreement && isProcessingStatus(agreement.status) && !realtimeConnected,
+  );
+
+  useEffect(() => {
+    if (!shouldSubscribe || !agreementId || typeof WebSocket === "undefined") {
+      setRealtimeConnected(false);
+      return;
+    }
+
+    let disposed = false;
+    let retryAttempt = 0;
+    let reconnectTimer: number | undefined;
+    let socket: WebSocket | undefined;
+
+    const scheduleReconnect = () => {
+      if (disposed) {
+        return;
+      }
+      setRealtimeConnected(false);
+      const delay = Math.min(1_000 * 2 ** retryAttempt, 15_000);
+      retryAttempt += 1;
+      reconnectTimer = window.setTimeout(connect, delay);
+    };
+
+    const connect = () => {
+      if (disposed) {
+        return;
+      }
+      let nextSocket: WebSocket;
+      try {
+        nextSocket = new WebSocket(checkoutSocketUrl(token));
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      socket = nextSocket;
+
+      nextSocket.onopen = () => {
+        if (disposed) {
+          return;
+        }
+        retryAttempt = 0;
+        setRealtimeConnected(true);
+        void loadCheckout("refresh");
+      };
+
+      nextSocket.onmessage = (message) => {
+        const event = parseStatusEvent(message.data);
+        if (!event || event.agreementId !== agreementId) {
+          return;
+        }
+        const previousSequence = lastSequence.current;
+        if (previousSequence !== undefined && event.sequence <= previousSequence) {
+          return;
+        }
+        lastSequence.current = event.sequence;
+        if (previousSequence !== undefined && event.sequence > previousSequence + 1) {
+          void loadCheckout("refresh");
+          return;
+        }
+        setState((current) => {
+          if (current.status !== "ready" || current.checkout.agreement.id !== event.agreementId) {
+            return current;
+          }
+          return {
+            status: "ready",
+            checkout: {
+              ...current.checkout,
+              agreement: { ...current.checkout.agreement, status: event.status },
+            },
+          };
+        });
+      };
+
+      nextSocket.onerror = () => nextSocket.close();
+      nextSocket.onclose = () => {
+        if (socket === nextSocket) {
+          scheduleReconnect();
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+      }
+      socket?.close();
+    };
+  }, [agreementId, loadCheckout, shouldSubscribe, token]);
+
+  useEffect(() => {
+    if (!shouldPoll) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadCheckout("refresh");
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [loadCheckout, shouldPoll]);
+
+  const handleCreatePix = useCallback(async () => {
+    setCreatingPix(true);
+    setPixError(undefined);
+    try {
+      const response = await createPixCharge(token, pixIdempotencyKey(token));
+      setPix(response.pix);
+      void loadCheckout("refresh");
+    } catch {
+      setPixError("Não foi possível gerar o código PIX. Tente novamente.");
+    } finally {
+      setCreatingPix(false);
+    }
+  }, [loadCheckout, token]);
+
+  const handleCopyPix = useCallback(async (copyPaste: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable.");
+      }
+      await navigator.clipboard.writeText(copyPaste);
+      setCopyFeedback("Código PIX copiado.");
+    } catch {
+      setCopyFeedback("Selecione e copie o código PIX manualmente.");
+    }
+  }, []);
 
   if (state.status === "loading") {
     return <CheckoutLoading />;
@@ -146,9 +411,14 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
     return <CheckoutUnavailable kind="error" onRetry={loadCheckout} />;
   }
 
-  const { agreement } = state.checkout;
-  const status = checkoutStatus[agreement.status] ?? unknownStatus;
-  const currentStep = checkoutStep(agreement.status);
+  const { checkout } = state;
+  const { agreement: readyAgreement } = checkout;
+  const status = checkoutStatus[readyAgreement.status] ?? unknownStatus;
+  const currentStep = checkoutStep(readyAgreement.status);
+  const payment = paymentFor(checkout);
+  const copyPaste = payment?.pix_copy_paste ?? pix?.copy_paste;
+  const pixStatus = payment?.status ?? pix?.status;
+  const canCreatePix = readyAgreement.status === "AWAITING_PAYMENT" && !copyPaste && !payment;
 
   return (
     <main className="checkout-shell">
@@ -186,7 +456,7 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
         <section className="checkout-card" aria-label="Resumo do acordo de custódia">
           <div className="checkout-amount">
             <span>VALOR DO ACORDO</span>
-            <output>{displayMoney(agreement.amount, agreement.currency)}</output>
+            <output>{displayMoney(readyAgreement.amount, readyAgreement.currency)}</output>
           </div>
 
           <div className={`checkout-status checkout-status-${status.tone}`} role="status">
@@ -197,41 +467,146 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
             </div>
           </div>
 
+          {canCreatePix || copyPaste || pixError ? (
+            <PixPaymentPanel
+              copyFeedback={copyFeedback}
+              copyPaste={copyPaste}
+              creating={creatingPix}
+              error={pixError}
+              onCopy={handleCopyPix}
+              onCreate={handleCreatePix}
+              pixStatus={pixStatus}
+              showCreate={canCreatePix}
+            />
+          ) : null}
+
           <dl className="checkout-details">
             <div>
               <dt>Pagador</dt>
-              <dd>{agreement.customer.name}</dd>
+              <dd>{readyAgreement.customer.name}</dd>
             </div>
             <div>
               <dt>E-mail</dt>
-              <dd>{agreement.customer.email_masked}</dd>
+              <dd>{readyAgreement.customer.email_masked}</dd>
             </div>
             <div>
               <dt>Documento</dt>
-              <dd>{agreement.customer.document_masked}</dd>
+              <dd>{readyAgreement.customer.document_masked}</dd>
             </div>
             <div>
               <dt>Prazo para entrega</dt>
-              <dd>{deliveryWindow(agreement)}</dd>
+              <dd>{deliveryWindow(readyAgreement)}</dd>
             </div>
             <div>
               <dt>Taxa de custódia</dt>
-              <dd>{displayFee(agreement.fee_bps)}</dd>
+              <dd>{displayFee(readyAgreement.fee_bps)}</dd>
             </div>
             <div>
               <dt>Referência</dt>
-              <dd>{agreement.id}</dd>
+              <dd>{readyAgreement.id}</dd>
             </div>
           </dl>
 
           <p className="checkout-disclosure">
-            A cobrança PIX será apresentada nesta tela quando estiver pronta. Não compartilhe este
-            link com terceiros.
+            O código PIX aparece apenas nesta tela. Não compartilhe este link com terceiros.
           </p>
         </section>
       </section>
     </main>
   );
+}
+
+function PixPaymentPanel({
+  copyFeedback,
+  copyPaste,
+  creating,
+  error,
+  onCopy,
+  onCreate,
+  pixStatus,
+  showCreate,
+}: {
+  copyFeedback: string | undefined;
+  copyPaste: string | undefined;
+  creating: boolean;
+  error: string | undefined;
+  onCopy: (copyPaste: string) => Promise<void>;
+  onCreate: () => Promise<void>;
+  pixStatus: string | undefined;
+  showCreate: boolean;
+}) {
+  return (
+    <section className="checkout-pix" aria-labelledby="pix-title" aria-busy={creating}>
+      <div className="checkout-pix-heading">
+        <div>
+          <p className="checkout-pix-kicker">PAGAMENTO PIX</p>
+          <h2 id="pix-title">{copyPaste ? "Pague com PIX" : "Gere seu código PIX"}</h2>
+        </div>
+        {pixStatus ? <span className="checkout-pix-state">{pixStateCopy(pixStatus)}</span> : null}
+      </div>
+
+      {showCreate ? (
+        <>
+          <p className="checkout-pix-copy">
+            Gere uma cobrança única. O valor só seguirá para custódia após a confirmação e a análise
+            de segurança.
+          </p>
+          <button
+            className="primary-action checkout-pix-action"
+            disabled={creating}
+            type="button"
+            onClick={() => void onCreate()}
+          >
+            {creating ? "Gerando código PIX…" : "Gerar código PIX"}
+          </button>
+        </>
+      ) : null}
+
+      {copyPaste ? (
+        <div className="checkout-pix-code">
+          <label htmlFor="pix-copy-paste">Código PIX copia e cola</label>
+          <textarea
+            readOnly
+            aria-label="Código PIX copia e cola"
+            id="pix-copy-paste"
+            spellCheck={false}
+            value={copyPaste}
+          />
+          <button
+            className="secondary-action checkout-pix-copy-action"
+            type="button"
+            onClick={() => void onCopy(copyPaste)}
+          >
+            Copiar código PIX
+          </button>
+        </div>
+      ) : null}
+
+      {error ? (
+        <p className="checkout-pix-feedback checkout-pix-feedback-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {copyFeedback ? (
+        <p className="checkout-pix-feedback" role="status">
+          {copyFeedback}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function pixStateCopy(status: string): string {
+  if (status === "PENDING") {
+    return "AGUARDANDO PAGAMENTO";
+  }
+  if (status === "CONFIRMED") {
+    return "PAGAMENTO CONFIRMADO";
+  }
+  if (status === "REJECTED") {
+    return "PAGAMENTO RECUSADO";
+  }
+  return "EM PROCESSAMENTO";
 }
 
 function CheckoutLoading() {

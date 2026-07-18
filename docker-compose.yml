@@ -1,5 +1,26 @@
 name: escrow
 
+x-runtime-environment: &runtime-environment
+  DJANGO_DEBUG: "true"
+  DJANGO_SECRET_KEY: local-development-only-not-a-secret
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,api
+  DATABASE_URL: postgresql://escrow:escrow-local-only@postgres:5432/escrow
+  RABBITMQ_URL: amqp://escrow:escrow-local-only@rabbitmq:5672/%2F
+  REDIS_URL: redis://redis:6379/0
+  HEALTHCHECK_TIMEOUT_SECONDS: "1"
+  EMAIL_DELIVERY_BACKEND: ministack
+  MINISTACK_ENDPOINT_URL: http://ministack:4566
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: "000000000000"
+  AWS_SECRET_ACCESS_KEY: test
+  SES_FROM_EMAIL: no-reply@escrow.local
+  PII_ENCRYPTION_BACKEND: kms
+  PII_KMS_KEY_ID: alias/escrow-local-application
+  PII_BLIND_INDEX_SECRET: local-pii-blind-index-secret-change-me
+  CHECKOUT_TOKEN_HMAC_SECRET: local-checkout-token-key-only
+  AGREEMENT_IDEMPOTENCY_HMAC_SECRET: local-agreement-idempotency-hmac-key-only
+  SANDBOX_PIX_CALLBACK_SIGNING_SECRET: local-sandbox-pix-callback-secret
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -95,25 +116,7 @@ services:
   api:
     build:
       context: .
-    environment:
-      DJANGO_DEBUG: "true"
-      DJANGO_SECRET_KEY: local-development-only-not-a-secret
-      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,api
-      DATABASE_URL: postgresql://escrow:escrow-local-only@postgres:5432/escrow
-      RABBITMQ_URL: amqp://escrow:escrow-local-only@rabbitmq:5672/%2F
-      REDIS_URL: redis://redis:6379/0
-      HEALTHCHECK_TIMEOUT_SECONDS: "1"
-      EMAIL_DELIVERY_BACKEND: ministack
-      MINISTACK_ENDPOINT_URL: http://ministack:4566
-      AWS_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: "000000000000"
-      AWS_SECRET_ACCESS_KEY: test
-      SES_FROM_EMAIL: no-reply@escrow.local
-      PII_ENCRYPTION_BACKEND: kms
-      PII_KMS_KEY_ID: alias/escrow-local-application
-      PII_BLIND_INDEX_SECRET: local-pii-blind-index-secret-change-me
-      CHECKOUT_TOKEN_HMAC_SECRET: local-checkout-token-key-only
-      AGREEMENT_IDEMPOTENCY_HMAC_SECRET: local-agreement-idempotency-hmac-key-only
+    environment: *runtime-environment
     ports:
       - "8000:8000"
     depends_on:
@@ -139,6 +142,56 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
+
+  outbox-publisher:
+    build:
+      context: .
+    command:
+      ["uv", "run", "--no-sync", "celery", "-A", "escrow.celery:app", "worker", "--loglevel=INFO", "--concurrency=1", "--hostname=outbox@%h", "--queues=messaging.outbox"]
+    environment: *runtime-environment
+    depends_on:
+      api:
+        condition: service_healthy
+
+  risk-worker:
+    build:
+      context: .
+    command:
+      ["uv", "run", "--no-sync", "celery", "-A", "escrow.celery:app", "worker", "--loglevel=INFO", "--concurrency=1", "--hostname=risk@%h", "--queues=risk.funding,risk.dispute"]
+    environment: *runtime-environment
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ledger-worker:
+    build:
+      context: .
+    command:
+      ["uv", "run", "--no-sync", "celery", "-A", "escrow.celery:app", "worker", "--loglevel=INFO", "--concurrency=1", "--hostname=ledger@%h", "--queues=ledger.funding,ledger.release,ledger.refund"]
+    environment: *runtime-environment
+    depends_on:
+      api:
+        condition: service_healthy
+
+  notifications-worker:
+    build:
+      context: .
+    command:
+      ["uv", "run", "--no-sync", "celery", "-A", "escrow.celery:app", "worker", "--loglevel=INFO", "--concurrency=1", "--hostname=notifications@%h", "--queues=notifications.realtime,notifications.webhook"]
+    environment: *runtime-environment
+    depends_on:
+      api:
+        condition: service_healthy
+
+  celery-beat:
+    build:
+      context: .
+    command:
+      ["uv", "run", "--no-sync", "celery", "-A", "escrow.celery:app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *runtime-environment
+    depends_on:
+      api:
+        condition: service_healthy
 
   frontend:
     build:

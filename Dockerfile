@@ -7,6 +7,7 @@ COPY --from=uv /uv /uvx /bin/
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
+    UV_CACHE_DIR=/tmp/uv-cache \
     UV_LINK_MODE=copy
 
 WORKDIR /app
@@ -16,6 +17,12 @@ RUN uv sync --frozen --no-dev
 
 COPY manage.py ./
 COPY src ./src
+
+RUN groupadd --system escrow \
+    && useradd --system --gid escrow --home-dir /app --shell /usr/sbin/nologin escrow \
+    && chown -R escrow:escrow /app /tmp/uv-cache
+
+USER escrow
 
 EXPOSE 8000
 

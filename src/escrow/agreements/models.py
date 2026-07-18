@@ -50,6 +50,7 @@ class EscrowAgreement(models.Model):
     currency = models.CharField(max_length=3, choices=Currency.choices)
     fee_bps = models.PositiveIntegerField()
     delivery_window_days = models.PositiveSmallIntegerField()
+    funding_confirmed_at = models.DateTimeField(null=True, blank=True)
     delivery_due_at = models.DateTimeField(null=True, blank=True)
     inspection_deadline_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
@@ -58,6 +59,7 @@ class EscrowAgreement(models.Model):
         default=Status.AWAITING_PAYMENT,
     )
     version = models.PositiveIntegerField(default=0)
+    realtime_sequence = models.PositiveBigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

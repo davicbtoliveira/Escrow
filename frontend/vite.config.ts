@@ -23,6 +23,11 @@ export default defineConfig(({ mode }) => {
           target: environment.VITE_API_PROXY_TARGET || "http://api:8000",
           changeOrigin: true,
         },
+        "/ws": {
+          target: environment.VITE_API_PROXY_TARGET || "ws://api:8000",
+          changeOrigin: true,
+          ws: true,
+        },
       },
     },
   };

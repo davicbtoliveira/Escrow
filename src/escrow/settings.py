@@ -27,9 +27,15 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_spectacular",
     "escrow.agreements.apps.AgreementsConfig",
+    "escrow.audit.apps.AuditConfig",
     "escrow.identity.apps.IdentityConfig",
     "escrow.integrations.apps.IntegrationsConfig",
+    "escrow.ledger.apps.LedgerConfig",
+    "escrow.messaging.apps.MessagingConfig",
+    "escrow.notifications.apps.NotificationsConfig",
     "escrow.organizations.apps.OrganizationsConfig",
+    "escrow.payments.apps.PaymentsConfig",
+    "escrow.risk.apps.RiskConfig",
 ]
 
 MIDDLEWARE = [
@@ -154,6 +160,32 @@ PUBLIC_CHECKOUT_RATE_LIMIT_MAX = max(1, int(os.environ.get("PUBLIC_CHECKOUT_RATE
 PUBLIC_CHECKOUT_RATE_LIMIT_WINDOW_SECONDS = max(
     1, int(os.environ.get("PUBLIC_CHECKOUT_RATE_LIMIT_WINDOW_SECONDS", "60"))
 )
+WEBHOOK_RATE_LIMIT_MAX = max(1, int(os.environ.get("WEBHOOK_RATE_LIMIT_MAX", "600")))
+WEBHOOK_RATE_LIMIT_WINDOW_SECONDS = max(
+    1, int(os.environ.get("WEBHOOK_RATE_LIMIT_WINDOW_SECONDS", "60"))
+)
+SANDBOX_PIX_CALLBACK_SIGNING_SECRET = os.environ.get(
+    "SANDBOX_PIX_CALLBACK_SIGNING_SECRET",
+    "local-sandbox-pix-callback-secret" if DEBUG else "",
+)
+SANDBOX_PIX_ENABLED = os.environ.get("SANDBOX_PIX_ENABLED", str(DEBUG)).lower() == "true"
+
+CELERY_BROKER_URL = RABBITMQ_URL
+CELERY_RESULT_BACKEND = None
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BEAT_SCHEDULE = {
+    "publish-pending-outbox": {
+        "task": "escrow.messaging.publish_outbox_batch",
+        "schedule": 1.0,
+    }
+}
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [REDIS_URL]},
+    }
+}
 
 PII_ENCRYPTION_BACKEND = os.environ.get("PII_ENCRYPTION_BACKEND", "local" if DEBUG else "kms")
 PII_KMS_KEY_ID = os.environ.get("PII_KMS_KEY_ID", "alias/escrow-local-application")

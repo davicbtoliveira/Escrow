@@ -1,0 +1,49 @@
+"""Durable outbox and inbox records for at-least-once message delivery."""
+
+from __future__ import annotations
+
+import uuid
+
+from django.db import models
+
+
+class OutboxEvent(models.Model):
+    """A committed envelope waiting for a confirmed RabbitMQ publication."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    message_type = models.CharField(max_length=160)
+    version = models.PositiveSmallIntegerField()
+    occurred_at = models.DateTimeField()
+    correlation_id = models.CharField(max_length=128)
+    causation_id = models.CharField(max_length=128, null=True, blank=True)
+    tenant_id = models.CharField(max_length=128)
+    payload = models.JSONField()
+    routing_key = models.CharField(max_length=128)
+    published_at = models.DateTimeField(null=True, blank=True)
+    publish_attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=128, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["occurred_at", "id"]
+        indexes = [
+            models.Index(
+                fields=["published_at", "occurred_at"],
+                name="messaging_outbox_pending_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(version__gte=1),
+                name="messaging_outbox_version_positive",
+            ),
+        ]
+
+
+class ProcessedMessage(models.Model):
+    """The inbox claim retained with a consumer's durable business effect."""
+
+    id = models.BigAutoField(primary_key=True)
+    message_id = models.UUIDField(unique=True)
+    consumer = models.CharField(max_length=128)
+    processed_at = models.DateTimeField(auto_now_add=True)

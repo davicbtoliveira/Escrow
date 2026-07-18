@@ -102,6 +102,46 @@
                 }
             }
         },
+        "/api/v1/checkout/{checkout_token}/pix-charges/": {
+            "post": {
+                "operationId": "createSandboxPixCharge",
+                "description": "Create/replay the only simulated PIX charge behind a checkout capability.",
+                "parameters": [
+                    {
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Replay key for this public checkout PIX instruction.",
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "checkout_token",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "checkout"
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PublicSandboxPixChargeResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
         "/api/v1/integrations/organization/": {
             "get": {
                 "operationId": "getIntegrationOrganization",
@@ -138,10 +178,106 @@
                     }
                 }
             }
+        },
+        "/api/v1/providers/sandbox-pix/callbacks/": {
+            "post": {
+                "operationId": "receiveSandboxPixCallback",
+                "description": "Verify a provider-style callback and atomically enqueue risk processing.",
+                "tags": [
+                    "providers"
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SandboxCallbackResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/v1/sandbox/pix/charges/{charge_id}/actions/": {
+            "post": {
+                "operationId": "controlSandboxPixCharge",
+                "description": "Let an authorized tenant exercise deterministic local provider scenarios.",
+                "parameters": [
+                    {
+                        "in": "header",
+                        "name": "Authorization",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Bearer organization API key with payments:write.",
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "charge_id",
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SandboxControl"
+                            }
+                        },
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SandboxControl"
+                            }
+                        },
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SandboxControl"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/SandboxCallbackResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
         }
     },
     "components": {
         "schemas": {
+            "ActionEnum": {
+                "enum": [
+                    "confirm",
+                    "delay",
+                    "duplicate"
+                ],
+                "type": "string",
+                "description": "* `confirm` - confirm\n* `delay` - delay\n* `duplicate` - duplicate"
+            },
             "Agreement": {
                 "type": "object",
                 "properties": {
@@ -172,6 +308,10 @@
                         "format": "date-time",
                         "nullable": true
                     },
+                    "realtime_sequence": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
                     "external_customer_id": {
                         "type": "string"
                     }
@@ -185,6 +325,7 @@
                     "external_customer_id",
                     "fee_bps",
                     "id",
+                    "realtime_sequence",
                     "status"
                 ]
             },
@@ -336,6 +477,10 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                    },
+                    "realtime_sequence": {
+                        "type": "integer",
+                        "minimum": 0
                     }
                 },
                 "required": [
@@ -346,6 +491,7 @@
                     "delivery_window_days",
                     "fee_bps",
                     "id",
+                    "realtime_sequence",
                     "status"
                 ]
             },
@@ -354,10 +500,124 @@
                 "properties": {
                     "agreement": {
                         "$ref": "#/components/schemas/PublicAgreement"
+                    },
+                    "payment": {
+                        "$ref": "#/components/schemas/PublicPayment"
                     }
                 },
                 "required": [
                     "agreement"
+                ]
+            },
+            "PublicPayment": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/PublicPaymentStatusEnum"
+                    },
+                    "amount": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "$ref": "#/components/schemas/CurrencyEnum"
+                    },
+                    "pix_copy_paste": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "amount",
+                    "currency",
+                    "id",
+                    "pix_copy_paste",
+                    "status"
+                ]
+            },
+            "PublicPaymentStatusEnum": {
+                "enum": [
+                    "PENDING",
+                    "CONFIRMED",
+                    "REJECTED"
+                ],
+                "type": "string",
+                "description": "* `PENDING` - PENDING\n* `CONFIRMED` - CONFIRMED\n* `REJECTED` - REJECTED"
+            },
+            "PublicSandboxPixChargeResponse": {
+                "type": "object",
+                "properties": {
+                    "payment": {
+                        "$ref": "#/components/schemas/PublicSandboxPixPayment"
+                    }
+                },
+                "required": [
+                    "payment"
+                ]
+            },
+            "PublicSandboxPixPayment": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/PublicSandboxPixPaymentStatusEnum"
+                    },
+                    "amount": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "$ref": "#/components/schemas/CurrencyEnum"
+                    },
+                    "pix_copy_paste": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "amount",
+                    "currency",
+                    "id",
+                    "pix_copy_paste",
+                    "status"
+                ]
+            },
+            "PublicSandboxPixPaymentStatusEnum": {
+                "enum": [
+                    "PENDING",
+                    "CONFIRMED",
+                    "REJECTED"
+                ],
+                "type": "string",
+                "description": "* `PENDING` - Pending\n* `CONFIRMED` - Confirmed\n* `REJECTED` - Rejected"
+            },
+            "SandboxCallbackResponse": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string"
+                    },
+                    "duplicate": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "duplicate",
+                    "status"
+                ]
+            },
+            "SandboxControl": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "$ref": "#/components/schemas/ActionEnum"
+                    }
+                },
+                "required": [
+                    "action"
                 ]
             }
         },

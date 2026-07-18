@@ -61,6 +61,13 @@ _ERROR_MESSAGES = {
     "pii_encryption_unavailable": "A proteção de dados sensíveis está indisponível.",
     "public_checkout_rate_limited": "Limite de acesso ao checkout atingido.",
     "public_checkout_rate_limit_unavailable": "O controle de limite do checkout está indisponível.",
+    "sandbox_callback_invalid": "O callback do provedor não é válido.",
+    "sandbox_callback_unavailable": "O callback simulado não está disponível.",
+    "sandbox_charge_conflict": "A cobrança PIX não pode ser criada neste estado.",
+    "sandbox_control_unavailable": "O controle PIX simulado não está disponível.",
+    "sandbox_duplicate_unavailable": "Ainda não existe um callback para repetir.",
+    "webhook_rate_limited": "Limite de chamadas do webhook atingido.",
+    "webhook_rate_limit_unavailable": "O controle de limite do webhook está indisponível.",
     "validation_error": "Existem campos inválidos.",
 }
 

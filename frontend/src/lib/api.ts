@@ -76,6 +76,15 @@ export type PasswordRecoveryConfirmationInput = {
 /** Generated from the backend OpenAPI contract via `bun run api:generate`. */
 export type PublicCheckout = components["schemas"]["PublicCheckoutResponse"];
 
+export type PixChargeResponse = {
+  status: "PROCESSING";
+  pix: {
+    id: string;
+    copy_paste: string;
+    status: "PENDING" | "CONFIRMED" | "REJECTED";
+  };
+};
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -196,6 +205,25 @@ async function publicRequest<T>(path: string): Promise<T> {
   return payload as T;
 }
 
+async function publicPost<T>(path: string, headers: HeadersInit): Promise<T> {
+  const response = await fetch(path, {
+    cache: "no-store",
+    credentials: "omit",
+    headers: { Accept: "application/json", ...headers },
+    method: "POST",
+  });
+  const contentType = response.headers.get("Content-Type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json().catch(() => undefined)
+    : undefined;
+
+  if (!response.ok) {
+    throw new ApiError(response.status, responseMessage(payload));
+  }
+
+  return payload as T;
+}
+
 function isPublicCheckout(value: unknown): value is PublicCheckout {
   if (!isRecord(value) || !isRecord(value.agreement)) {
     return false;
@@ -216,6 +244,24 @@ function isPublicCheckout(value: unknown): value is PublicCheckout {
     typeof customer.name === "string" &&
     typeof customer.email_masked === "string" &&
     typeof customer.document_masked === "string"
+  );
+}
+
+function isPixChargeResponse(
+  value: unknown,
+): value is components["schemas"]["PublicSandboxPixChargeResponse"] {
+  if (!isRecord(value) || !isRecord(value.payment)) {
+    return false;
+  }
+  const payment = value.payment;
+  return (
+    typeof payment.id === "string" &&
+    (payment.status === "PENDING" ||
+      payment.status === "CONFIRMED" ||
+      payment.status === "REJECTED") &&
+    typeof payment.amount === "string" &&
+    (payment.currency === "BRL" || payment.currency === "USD") &&
+    typeof payment.pix_copy_paste === "string"
   );
 }
 
@@ -294,5 +340,23 @@ export const checkoutApi = {
       throw new ApiError(0, "O checkout retornou uma resposta inválida.");
     }
     return payload;
+  },
+
+  async createPixCharge(token: string, idempotencyKey: string): Promise<PixChargeResponse> {
+    const payload = await publicPost<unknown>(
+      `/api/v1/checkout/${encodeURIComponent(token)}/pix-charges/`,
+      { "Idempotency-Key": idempotencyKey },
+    );
+    if (!isPixChargeResponse(payload)) {
+      throw new ApiError(0, "A cobrança PIX retornou uma resposta inválida.");
+    }
+    return {
+      status: "PROCESSING",
+      pix: {
+        id: payload.payment.id,
+        copy_paste: payload.payment.pix_copy_paste,
+        status: payload.payment.status,
+      },
+    };
   },
 };

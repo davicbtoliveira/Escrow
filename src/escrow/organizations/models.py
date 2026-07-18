@@ -13,6 +13,7 @@ class Organization(models.Model):
     name = models.CharField(max_length=200)
     fee_bps = models.PositiveIntegerField(default=200)
     is_active = models.BooleanField(default=True)
+    risk_blocked = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

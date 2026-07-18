@@ -49,3 +49,26 @@ class CorrelationLoggingTests(SimpleTestCase):
         assert payload["http_path"] == "/api/v1/checkout/[redacted]/"
         assert checkout_token not in json.dumps(payload)
         assert checkout_token not in "\n".join(django_captured.output)
+
+    @patch(
+        "escrow.payments.views.check_public_checkout_rate_limit",
+        return_value=RateLimitDecision(allowed=True, retry_after_seconds=0),
+    )
+    @patch("escrow.payments.views.find_checkout_agreement", return_value=None)
+    def test_nested_checkout_payment_path_is_redacted_from_request_logs(
+        self,
+        _: object,
+        __: object,
+    ) -> None:
+        checkout_token = "chk_do-not-log-this-payment-capability"
+        with self.assertLogs("escrow.request", level="INFO") as captured:
+            response = self.client.post(
+                f"/api/v1/checkout/{checkout_token}/pix-charges/?token={checkout_token}",
+                headers={"Idempotency-Key": "redaction-pix-charge-001"},
+            )
+
+        payload = json.loads(JsonFormatter().format(captured.records[-1]))
+
+        assert response.status_code == 404
+        assert payload["http_path"] == "/api/v1/checkout/[redacted]/"
+        assert checkout_token not in json.dumps(payload)

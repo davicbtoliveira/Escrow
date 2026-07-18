@@ -13,7 +13,7 @@ from django.http import HttpRequest, HttpResponse
 
 _CORRELATION_ID = ContextVar("correlation_id", default="")
 _VALID_CORRELATION_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
-_CHECKOUT_PATH = re.compile(r"^/api/v1/checkout/[^/]+/?$")
+_CHECKOUT_PATH = re.compile(r"^/api/v1/checkout/[^/]+(?:/[^/]+)*/?$")
 logger = logging.getLogger("escrow.request")
 
 

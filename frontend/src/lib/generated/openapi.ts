@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/checkout/{checkout_token}/pix-charges/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Create/replay the only simulated PIX charge behind a checkout capability. */
+        post: operations["createSandboxPixCharge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/integrations/organization/": {
         parameters: {
             query?: never;
@@ -55,10 +72,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/providers/sandbox-pix/callbacks/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Verify a provider-style callback and atomically enqueue risk processing. */
+        post: operations["receiveSandboxPixCallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sandbox/pix/charges/{charge_id}/actions/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Let an authorized tenant exercise deterministic local provider scenarios. */
+        post: operations["controlSandboxPixCharge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description * `confirm` - confirm
+         *     * `delay` - delay
+         *     * `duplicate` - duplicate
+         * @enum {string}
+         */
+        ActionEnum: "confirm" | "delay" | "duplicate";
         Agreement: {
             /** Format: uuid */
             id: string;
@@ -70,6 +128,7 @@ export interface components {
             delivery_window_days: number;
             /** Format: date-time */
             delivery_due_at: string | null;
+            realtime_sequence: number;
             external_customer_id: string;
         };
         AgreementCreate: {
@@ -120,9 +179,51 @@ export interface components {
             delivery_window_days: number;
             /** Format: date-time */
             delivery_due_at: string | null;
+            realtime_sequence: number;
         };
         PublicCheckoutResponse: {
             agreement: components["schemas"]["PublicAgreement"];
+            payment?: components["schemas"]["PublicPayment"];
+        };
+        PublicPayment: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["PublicPaymentStatusEnum"];
+            amount: string;
+            currency: components["schemas"]["CurrencyEnum"];
+            pix_copy_paste: string;
+        };
+        /**
+         * @description * `PENDING` - PENDING
+         *     * `CONFIRMED` - CONFIRMED
+         *     * `REJECTED` - REJECTED
+         * @enum {string}
+         */
+        PublicPaymentStatusEnum: "PENDING" | "CONFIRMED" | "REJECTED";
+        PublicSandboxPixChargeResponse: {
+            payment: components["schemas"]["PublicSandboxPixPayment"];
+        };
+        PublicSandboxPixPayment: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["PublicSandboxPixPaymentStatusEnum"];
+            amount: string;
+            currency: components["schemas"]["CurrencyEnum"];
+            pix_copy_paste: string;
+        };
+        /**
+         * @description * `PENDING` - Pending
+         *     * `CONFIRMED` - Confirmed
+         *     * `REJECTED` - Rejected
+         * @enum {string}
+         */
+        PublicSandboxPixPaymentStatusEnum: "PENDING" | "CONFIRMED" | "REJECTED";
+        SandboxCallbackResponse: {
+            status: string;
+            duplicate: boolean;
+        };
+        SandboxControl: {
+            action: components["schemas"]["ActionEnum"];
         };
     };
     responses: never;
@@ -184,6 +285,30 @@ export interface operations {
             };
         };
     };
+    createSandboxPixCharge: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Replay key for this public checkout PIX instruction. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                checkout_token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicSandboxPixChargeResponse"];
+                };
+            };
+        };
+    };
     getIntegrationOrganization: {
         parameters: {
             query?: never;
@@ -202,6 +327,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IntegrationOrganization"];
+                };
+            };
+        };
+    };
+    receiveSandboxPixCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SandboxCallbackResponse"];
+                };
+            };
+        };
+    };
+    controlSandboxPixCharge: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer organization API key with payments:write. */
+                Authorization: string;
+            };
+            path: {
+                charge_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SandboxControl"];
+                "application/x-www-form-urlencoded": components["schemas"]["SandboxControl"];
+                "multipart/form-data": components["schemas"]["SandboxControl"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SandboxCallbackResponse"];
                 };
             };
         };

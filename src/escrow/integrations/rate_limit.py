@@ -76,6 +76,21 @@ def check_public_checkout_rate_limit(
     )
 
 
+def check_webhook_rate_limit(
+    source: str,
+    *,
+    now_timestamp: float | None = None,
+) -> RateLimitDecision:
+    """Rate-limit one provider callback source without retaining its raw address."""
+    return _check_token_bucket(
+        redis_key=f"rate-limit:webhook:{sha256(source.encode()).hexdigest()}",
+        max_requests=settings.WEBHOOK_RATE_LIMIT_MAX,
+        window_seconds=settings.WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
+        burst=0,
+        now_timestamp=now_timestamp,
+    )
+
+
 def _check_token_bucket(
     *,
     redis_key: str,

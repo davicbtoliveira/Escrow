@@ -27,6 +27,7 @@ from escrow.agreements.services import (
 from escrow.http import InvalidJsonBody, error_response, parse_json_body
 from escrow.integrations.authentication import ApiKeyAuthentication, authenticate_api_key
 from escrow.integrations.rate_limit import check_public_checkout_rate_limit
+from escrow.payments.presentation import public_payment_for_agreement
 
 
 class CustomerCreateSerializer(serializers.Serializer[Any]):
@@ -58,6 +59,7 @@ class AgreementTermsSerializer(serializers.Serializer[Any]):
     fee_bps = serializers.IntegerField()
     delivery_window_days = serializers.IntegerField()
     delivery_due_at = serializers.DateTimeField(allow_null=True)
+    realtime_sequence = serializers.IntegerField(min_value=0)
 
 
 class AgreementSerializer(AgreementTermsSerializer):
@@ -68,6 +70,14 @@ class PublicAgreementSerializer(AgreementTermsSerializer):
     pass
 
 
+class PublicPaymentSerializer(serializers.Serializer[Any]):
+    id = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=["PENDING", "CONFIRMED", "REJECTED"])
+    amount = serializers.CharField()
+    currency = serializers.ChoiceField(choices=["BRL", "USD"])
+    pix_copy_paste = serializers.CharField()
+
+
 class AgreementCreationResponseSerializer(serializers.Serializer[Any]):
     agreement = AgreementSerializer()
     checkout_url = serializers.URLField()
@@ -75,6 +85,7 @@ class AgreementCreationResponseSerializer(serializers.Serializer[Any]):
 
 class PublicCheckoutResponseSerializer(serializers.Serializer[Any]):
     agreement = PublicAgreementSerializer()
+    payment = PublicPaymentSerializer(required=False)
 
 
 @extend_schema(
@@ -159,7 +170,11 @@ def public_checkout(request: HttpRequest, checkout_token: str) -> Response | Htt
         return _checkout_headers(error_response("pii_encryption_unavailable", 503))
     if agreement is None:
         return _checkout_headers(error_response("not_found", 404))
-    return _checkout_headers(Response(public_checkout_payload(agreement)))
+    payload = public_checkout_payload(agreement)
+    payment = public_payment_for_agreement(agreement)
+    if payment is not None:
+        payload["payment"] = payment
+    return _checkout_headers(Response(payload))
 
 
 def _request_ip(request: HttpRequest) -> str:

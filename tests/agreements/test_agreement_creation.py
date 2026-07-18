@@ -336,6 +336,7 @@ class AgreementCreationApiTests(TestCase):
             "delivery_window_days",
             "delivery_due_at",
             "fee_bps",
+            "realtime_sequence",
         }
         assert agreement["customer"] == {
             "name": "Ana S.",
