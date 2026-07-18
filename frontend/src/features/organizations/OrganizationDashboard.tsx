@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, type CurrentOrganization, organizationApi } from "../../lib/api";
 import { ApiKeyPanel } from "../integrations/ApiKeyPanel";
+import { WebhookPanel } from "../integrations/WebhookPanel";
 
 type OrganizationDashboardProps = {
   onLogout: () => void;
@@ -204,7 +205,12 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
         )}
       </section>
 
-      {membership.role === "OWNER" ? <ApiKeyPanel /> : null}
+      {membership.role === "OWNER" ? (
+        <>
+          <ApiKeyPanel />
+          <WebhookPanel />
+        </>
+      ) : null}
     </main>
   );
 }

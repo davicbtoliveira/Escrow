@@ -12,7 +12,21 @@ function setCookie(value: string) {
 function installFetchMock(
   implementation: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ) {
-  const fetchMock = mock(implementation);
+  const fetchMock = mock((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/current/webhooks/") || url.includes("/current/webhook-deliveries/")) {
+      const payload = url.includes("webhook-deliveries")
+        ? { webhook_deliveries: [] }
+        : { webhook_endpoints: [] };
+      return Promise.resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return implementation(input, init);
+  });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: fetchMock,
@@ -108,10 +122,10 @@ describe("painel de chaves da organização", () => {
     render(<OrganizationDashboard onLogout={() => undefined} onReturnToLogin={() => undefined} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Chaves de integração" })).toBeInTheDocument();
+      expect(screen.getByText("esk_live_ab12")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("esk_live_ab12")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Chaves de integração" })).toBeInTheDocument();
     expect(screen.getByText("Produção marketplace")).toBeInTheDocument();
     expect(screen.getByText("agreements:write")).toBeInTheDocument();
     expect(screen.getByText("203.0.113.14")).toBeInTheDocument();
@@ -161,9 +175,12 @@ describe("painel de chaves da organização", () => {
     render(<OrganizationDashboard onLogout={() => undefined} onReturnToLogin={() => undefined} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Criar chave de integração" })).toBeEnabled();
+      expect(
+        screen.getByText("Nenhuma chave ativa foi criada para esta organização."),
+      ).toBeInTheDocument();
     });
 
+    expect(screen.getByRole("button", { name: "Criar chave de integração" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Criar chave de integração" }));
     fireEvent.change(screen.getByLabelText("Nome da chave"), {
       target: { value: "Marketplace produção" },

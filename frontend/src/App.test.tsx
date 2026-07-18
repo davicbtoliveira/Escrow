@@ -41,6 +41,8 @@ function organizationDashboardResponse() {
         },
       ],
       api_keys: [],
+      webhook_endpoints: [],
+      webhook_deliveries: [],
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );

@@ -7,6 +7,7 @@ import uuid
 from django.utils import timezone
 
 from escrow.agreements.models import EscrowAgreement
+from escrow.integrations.webhooks import enqueue_agreement_webhook_event
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.models import OutboxEvent
 from escrow.messaging.outbox import enqueue_outbox_event
@@ -43,6 +44,14 @@ def enqueue_agreement_status_changed(
         },
     )
     existing = OutboxEvent.objects.filter(id=envelope.message_id).first()
-    if existing is not None:
-        return existing
-    return enqueue_outbox_event(envelope, routing_key=NOTIFICATIONS_REALTIME_QUEUE.name)
+    realtime_event = (
+        existing
+        if existing is not None
+        else enqueue_outbox_event(envelope, routing_key=NOTIFICATIONS_REALTIME_QUEUE.name)
+    )
+    enqueue_agreement_webhook_event(
+        agreement,
+        correlation_id=correlation_id,
+        causation_id=causation_id,
+    )
+    return realtime_event

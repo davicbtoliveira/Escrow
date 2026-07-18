@@ -101,6 +101,32 @@ export type CustomerDeliveryAcceptance = {
   transfer_id: string;
 };
 
+export type WebhookEndpoint = {
+  id: string;
+  url: string;
+  is_active: boolean;
+  previous_secret_expires_at: string | null;
+  created_at: string | null;
+};
+
+export type WebhookDeliveryStatus = "PENDING" | "RETRYING" | "DELIVERED" | "FAILED";
+
+export type WebhookDelivery = {
+  id: string;
+  endpoint_id: string;
+  event_id: string;
+  agreement_id: string;
+  event_type: string;
+  sequence: number;
+  status: WebhookDeliveryStatus;
+  attempts: number;
+  next_attempt_at: string | null;
+  delivered_at: string | null;
+  last_response_status: number | null;
+  last_error: string;
+  replay_count: number;
+};
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -360,6 +386,45 @@ export const organizationApi = {
   revokeApiKey(apiKeyId: string): Promise<{ api_key: OrganizationApiKey }> {
     return post<{ api_key: OrganizationApiKey }>(
       `/api/v1/organizations/current/api-keys/${apiKeyId}/revoke/`,
+    );
+  },
+
+  webhookEndpoints(): Promise<{ webhook_endpoints: WebhookEndpoint[] }> {
+    return request<{ webhook_endpoints: WebhookEndpoint[] }>(
+      "/api/v1/organizations/current/webhooks/",
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+  },
+
+  createWebhookEndpoint(
+    url: string,
+  ): Promise<{ webhook_endpoint: WebhookEndpoint; secret: string }> {
+    return post<{ webhook_endpoint: WebhookEndpoint; secret: string }>(
+      "/api/v1/organizations/current/webhooks/",
+      { url },
+    );
+  },
+
+  rotateWebhookSecret(
+    endpointId: string,
+    overlapSeconds: number,
+  ): Promise<{ webhook_endpoint: WebhookEndpoint; secret: string }> {
+    return post<{ webhook_endpoint: WebhookEndpoint; secret: string }>(
+      `/api/v1/organizations/current/webhooks/${endpointId}/rotate/`,
+      { overlap_seconds: overlapSeconds },
+    );
+  },
+
+  webhookDeliveries(): Promise<{ webhook_deliveries: WebhookDelivery[] }> {
+    return request<{ webhook_deliveries: WebhookDelivery[] }>(
+      "/api/v1/organizations/current/webhook-deliveries/",
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+  },
+
+  replayWebhookDelivery(deliveryId: string): Promise<{ webhook_delivery: WebhookDelivery }> {
+    return post<{ webhook_delivery: WebhookDelivery }>(
+      `/api/v1/organizations/current/webhook-deliveries/${deliveryId}/replay/`,
     );
   },
 };

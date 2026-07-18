@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from django.conf import settings
+from django.db import IntegrityError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_protect
@@ -15,6 +16,7 @@ from rest_framework import serializers
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 
+from escrow.audit.services import record_audit_event
 from escrow.http import InvalidJsonBody, error_response, parse_json_body, session_required
 from escrow.identity.models import User
 from escrow.integrations.authentication import ApiKeyAuthentication, authenticate_api_key
@@ -25,7 +27,13 @@ from escrow.integrations.key_service import (
     revoke_api_key,
     rotate_api_key,
 )
-from escrow.integrations.models import ApiKey
+from escrow.integrations.models import ApiKey, WebhookDelivery, WebhookEndpoint
+from escrow.integrations.webhooks import (
+    WebhookEndpointValidationError,
+    create_webhook_endpoint,
+    replay_webhook_delivery,
+    rotate_webhook_secret,
+)
 from escrow.organizations.models import OrganizationMember
 from escrow.organizations.services import MembershipNotFoundError, current_membership_for
 
@@ -204,3 +212,145 @@ def integration_organization(request: HttpRequest) -> Response | HttpResponse:
     assert isinstance(authenticated, ApiKeyAuthentication)
     organization = authenticated.api_key.organization
     return Response({"organization": {"id": str(organization.id), "name": organization.name}})
+
+
+def _webhook_endpoint_payload(endpoint: WebhookEndpoint) -> dict[str, object]:
+    return {
+        "id": str(endpoint.id),
+        "url": endpoint.url,
+        "is_active": endpoint.is_active,
+        "previous_secret_expires_at": _isoformat(endpoint.previous_secret_expires_at),
+        "created_at": _isoformat(endpoint.created_at),
+    }
+
+
+def _webhook_delivery_payload(delivery: WebhookDelivery) -> dict[str, object]:
+    return {
+        "id": str(delivery.id),
+        "endpoint_id": str(delivery.endpoint_id),
+        "event_id": str(delivery.event_id),
+        "agreement_id": str(delivery.event.agreement_id),
+        "event_type": delivery.event.event_type,
+        "sequence": delivery.event.sequence,
+        "status": delivery.status,
+        "attempts": delivery.attempts,
+        "next_attempt_at": _isoformat(delivery.next_attempt_at),
+        "delivered_at": _isoformat(delivery.delivered_at),
+        "last_response_status": delivery.last_response_status,
+        "last_error": delivery.last_error,
+        "replay_count": delivery.replay_count,
+    }
+
+
+@require_http_methods(["GET", "POST"])
+@csrf_protect
+@session_required
+def webhook_endpoints(request: HttpRequest) -> HttpResponse:
+    """Manage owner-only webhook destinations without ever re-displaying a secret."""
+    membership = _current_owner(request)
+    if isinstance(membership, HttpResponse):
+        return membership
+    if request.method == "GET":
+        endpoints = WebhookEndpoint.objects.filter(organization=membership.organization)
+        return JsonResponse(
+            {"webhook_endpoints": [_webhook_endpoint_payload(item) for item in endpoints]}
+        )
+    try:
+        payload = parse_json_body(request)
+        if set(payload) != {"url"}:
+            raise ValueError
+        endpoint, raw_secret = create_webhook_endpoint(
+            organization=membership.organization,
+            url=payload["url"],
+        )
+    except (InvalidJsonBody, ValueError, WebhookEndpointValidationError):
+        return error_response("validation_error", 400)
+    except IntegrityError:
+        return error_response("webhook_endpoint_exists", 409)
+    record_audit_event(
+        event_type="webhook_endpoint_created",
+        organization=membership.organization,
+        actor=cast(User, request.user),
+        correlation_id=request.headers.get("X-Correlation-ID", ""),
+        payload={"endpoint_id": str(endpoint.id)},
+    )
+    return JsonResponse(
+        {"webhook_endpoint": _webhook_endpoint_payload(endpoint), "secret": raw_secret}, status=201
+    )
+
+
+def _webhook_endpoint_for_owner(
+    endpoint_id: str,
+    membership: OrganizationMember,
+) -> WebhookEndpoint | HttpResponse:
+    try:
+        return WebhookEndpoint.objects.get(id=endpoint_id, organization=membership.organization)
+    except (WebhookEndpoint.DoesNotExist, ValueError):
+        return error_response("not_found", 404)
+
+
+@require_http_methods(["POST"])
+@csrf_protect
+@session_required
+def rotate_webhook(request: HttpRequest, endpoint_id: str) -> HttpResponse:
+    """Issue one replacement signing secret with a bounded, auditable overlap."""
+    membership = _current_owner(request)
+    if isinstance(membership, HttpResponse):
+        return membership
+    endpoint = _webhook_endpoint_for_owner(endpoint_id, membership)
+    if isinstance(endpoint, HttpResponse):
+        return endpoint
+    try:
+        payload = parse_json_body(request) if request.body else {}
+        overlap_seconds = payload.get("overlap_seconds", 3600)
+        rotated, raw_secret = rotate_webhook_secret(endpoint, overlap_seconds=overlap_seconds)
+    except (InvalidJsonBody, WebhookEndpointValidationError, ValueError):
+        return error_response("validation_error", 400)
+    record_audit_event(
+        event_type="webhook_secret_rotated",
+        organization=membership.organization,
+        actor=cast(User, request.user),
+        correlation_id=request.headers.get("X-Correlation-ID", ""),
+        payload={"endpoint_id": str(rotated.id)},
+    )
+    return JsonResponse(
+        {"webhook_endpoint": _webhook_endpoint_payload(rotated), "secret": raw_secret}
+    )
+
+
+@require_http_methods(["GET"])
+@session_required
+def webhook_deliveries(request: HttpRequest) -> HttpResponse:
+    """Show tenant-safe delivery status for the organization operations dashboard."""
+    try:
+        membership = current_membership_for(cast(User, request.user))
+    except MembershipNotFoundError:
+        return error_response("organization_membership_required", 403)
+    deliveries = WebhookDelivery.objects.select_related("event", "endpoint").filter(
+        endpoint__organization=membership.organization
+    )
+    return JsonResponse(
+        {"webhook_deliveries": [_webhook_delivery_payload(item) for item in deliveries]}
+    )
+
+
+@require_http_methods(["POST"])
+@csrf_protect
+@session_required
+def replay_webhook(request: HttpRequest, delivery_id: str) -> HttpResponse:
+    """Replay only a failed delivery while retaining its immutable event identity."""
+    membership = _current_owner(request)
+    if isinstance(membership, HttpResponse):
+        return membership
+    try:
+        delivery = WebhookDelivery.objects.select_related("event", "endpoint").get(
+            id=delivery_id,
+            endpoint__organization=membership.organization,
+        )
+    except (WebhookDelivery.DoesNotExist, ValueError):
+        return error_response("not_found", 404)
+    replayed = replay_webhook_delivery(
+        delivery,
+        correlation_id=request.headers.get("X-Correlation-ID", ""),
+    )
+    return JsonResponse({"webhook_delivery": _webhook_delivery_payload(replayed)})
