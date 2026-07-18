@@ -70,6 +70,30 @@ function checkoutResponse() {
   );
 }
 
+function inspectionCheckoutResponse() {
+  return new Response(
+    JSON.stringify({
+      agreement: {
+        id: "agr_delivery_inspection",
+        status: "INSPECTION",
+        customer: {
+          name: "Marina Silva",
+          email_masked: "ma••••@exemplo.com",
+          document_masked: "***.456.789-**",
+        },
+        amount: "50000.00",
+        currency: "BRL",
+        delivery_window_days: 7,
+        delivery_due_at: "2026-07-18T12:00:00Z",
+        inspection_deadline_at: "2026-07-25T12:00:00Z",
+        fee_bps: 200,
+        realtime_sequence: 3,
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 afterEach(() => {
   cleanup();
   window.history.pushState({}, "", "/");
@@ -196,6 +220,73 @@ describe("checkout público", () => {
       expect(screen.getByText("Valor protegido em custódia")).toBeInTheDocument();
     });
     expect(screen.getByText("3. Custódia")).toHaveClass("is-current");
+  });
+
+  it("exige e verifica OTP antes de o cliente confirmar a entrega", async () => {
+    const requestLog: Array<{ body: string | undefined; url: string }> = [];
+    installFetchMock((input, init) => {
+      const url = String(input);
+      requestLog.push({ body: typeof init?.body === "string" ? init.body : undefined, url });
+      if (url.endsWith("/delivery-acceptance/otp/")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              challenge_id: "23a1a6a3-e20a-4e1a-919f-9e8403ebec6d",
+              expires_at: "2026-07-18T12:10:00Z",
+            }),
+            { status: 202, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/verify/")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ acceptance_token: "otp_accept_browser-proof" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      if (url.endsWith("/delivery-acceptance/")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ status: "PROCESSING", transfer_id: "rel_001" }), {
+            status: 202,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(inspectionCheckoutResponse());
+    });
+    window.history.pushState({}, "", "/checkout/checkout-token-delivery");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Entrega informada")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/25 de julho/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Receber código por e-mail" }));
+    await waitFor(() => {
+      expect(screen.getByLabelText("Código de confirmação")).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("Código de confirmação"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Validar código" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Confirmar entrega" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar entrega" }));
+    await waitFor(() => {
+      expect(
+        requestLog.some(
+          ({ body, url }) =>
+            url.endsWith("/delivery-acceptance/") && body?.includes("otp_accept_browser-proof"),
+        ),
+      ).toBe(true);
+    });
   });
 
   it("gera uma cobrança PIX e mostra o código copia e cola sem exibir o token", async () => {

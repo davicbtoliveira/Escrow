@@ -253,6 +253,7 @@ def agreement_payload(agreement: EscrowAgreement) -> dict[str, object]:
         "fee_bps": agreement.fee_bps,
         "delivery_window_days": agreement.delivery_window_days,
         "delivery_due_at": _isoformat(agreement.delivery_due_at),
+        "inspection_deadline_at": _isoformat(agreement.inspection_deadline_at),
         "realtime_sequence": agreement.realtime_sequence,
     }
 

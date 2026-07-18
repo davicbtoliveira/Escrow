@@ -29,6 +29,15 @@ function displayDate(value: string): string {
   }).format(new Date(value));
 }
 
+function displayReleaseMoney(amountMinor: number, currency: "BRL"): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amountMinor / 100);
+}
+
 function dashboardError(error: unknown): string {
   if (error instanceof ApiError && error.status === 401) {
     return "Sua sessão não está ativa. Entre novamente para abrir os dados da organização.";
@@ -180,13 +189,13 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
                 <div>
                   <strong>{release.id}</strong>
                   <span>Disponível em {displayDate(release.release_at)}</span>
+                  <span>
+                    Bruto {displayReleaseMoney(release.gross_minor, release.currency)} · Taxa{" "}
+                    {displayReleaseMoney(release.fee_minor, release.currency)} · Líquido{" "}
+                    {displayReleaseMoney(release.net_minor, release.currency)}
+                  </span>
                 </div>
-                <output>
-                  {new Intl.NumberFormat("pt-BR", {
-                    style: "currency",
-                    currency: release.currency,
-                  }).format(release.amount_minor / 100)}
-                </output>
+                <output>{displayReleaseMoney(release.net_minor, release.currency)}</output>
               </li>
             ))}
           </ol>

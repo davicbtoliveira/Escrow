@@ -68,8 +68,17 @@ _ERROR_MESSAGES = {
     "sandbox_duplicate_unavailable": "Ainda não existe um callback para repetir.",
     "risk_analyst_required": "A função de analista de risco é obrigatória.",
     "funding_review_conflict": "A análise de risco já não pode ser alterada.",
+    "delivery_report_conflict": "A entrega não pode ser registrada neste estado.",
+    "customer_otp_invalid": "O código de verificação é inválido ou expirou.",
+    "customer_otp_unavailable": "O envio do código de verificação está indisponível.",
+    "customer_otp_delivery_unavailable": "Não foi possível enviar o código de verificação.",
+    "customer_otp_rate_limited": "Limite de códigos de verificação atingido.",
+    "customer_otp_rate_limit_unavailable": "O controle de limite do código está indisponível.",
+    "customer_acceptance_unauthorized": "A confirmação de entrega não foi autorizada.",
+    "customer_acceptance_unavailable": "A confirmação de entrega não está disponível neste estado.",
     "webhook_rate_limited": "Limite de chamadas do webhook atingido.",
     "webhook_rate_limit_unavailable": "O controle de limite do webhook está indisponível.",
+    "webhook_endpoint_exists": "Este endpoint de webhook já está configurado.",
     "validation_error": "Existem campos inválidos.",
 }
 

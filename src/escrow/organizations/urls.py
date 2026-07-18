@@ -24,6 +24,26 @@ urlpatterns = [
         name="organization-api-key-revoke",
     ),
     path(
+        "current/webhooks/",
+        integration_views.webhook_endpoints,
+        name="organization-webhook-endpoints",
+    ),
+    path(
+        "current/webhooks/<uuid:endpoint_id>/rotate/",
+        integration_views.rotate_webhook,
+        name="organization-webhook-rotate",
+    ),
+    path(
+        "current/webhook-deliveries/",
+        integration_views.webhook_deliveries,
+        name="organization-webhook-deliveries",
+    ),
+    path(
+        "current/webhook-deliveries/<uuid:delivery_id>/replay/",
+        integration_views.replay_webhook,
+        name="organization-webhook-replay",
+    ),
+    path(
         "current/members/<uuid:member_id>/", views.member_detail, name="organization-member-detail"
     ),
 ]

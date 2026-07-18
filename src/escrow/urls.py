@@ -6,6 +6,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularJSONAPIView
 
 from escrow.agreements import views as agreement_views
+from escrow.delivery import views as delivery_views
 from escrow.health import liveness, readiness
 from escrow.payments import views as payment_views
 
@@ -18,9 +19,29 @@ urlpatterns = [
     path("api/v1/organizations/", include("escrow.organizations.urls")),
     path("api/v1/agreements/", agreement_views.agreement_collection, name="agreement-collection"),
     path(
+        "api/v1/agreements/<uuid:agreement_id>/delivery/",
+        delivery_views.report_agreement_delivery,
+        name="agreement-delivery-report",
+    ),
+    path(
         "api/v1/checkout/<str:checkout_token>/pix-charges/",
         payment_views.public_checkout_pix_charge,
         name="public-checkout-pix-charge",
+    ),
+    path(
+        "api/v1/checkout/<str:checkout_token>/delivery-acceptance/otp/",
+        delivery_views.request_customer_delivery_acceptance_otp,
+        name="customer-delivery-otp-request",
+    ),
+    path(
+        "api/v1/checkout/<str:checkout_token>/delivery-acceptance/otp/<uuid:challenge_id>/verify/",
+        delivery_views.verify_customer_delivery_acceptance_otp,
+        name="customer-delivery-otp-verify",
+    ),
+    path(
+        "api/v1/checkout/<str:checkout_token>/delivery-acceptance/",
+        delivery_views.accept_customer_reported_delivery,
+        name="customer-delivery-acceptance",
     ),
     path(
         "api/v1/checkout/<str:checkout_token>/",

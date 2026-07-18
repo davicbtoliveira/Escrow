@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agreements/{agreement_id}/delivery/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Let the owning organization begin its customer's inspection window. */
+        post: operations["reportAgreementDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/checkout/{checkout_token}/": {
         parameters: {
             query?: never;
@@ -32,6 +49,57 @@ export interface paths {
         get: operations["getPublicCheckout"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/checkout/{checkout_token}/delivery-acceptance/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Asynchronously request release after a fresh customer email verification. */
+        post: operations["acceptCustomerDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/checkout/{checkout_token}/delivery-acceptance/otp/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Email the customer a proof required before they can release held funds. */
+        post: operations["requestCustomerDeliveryAcceptanceOtp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/checkout/{checkout_token}/delivery-acceptance/otp/{challenge_id}/verify/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Turn a valid emailed code into a short-lived one-time acceptance proof. */
+        post: operations["verifyCustomerDeliveryAcceptanceOtp"];
         delete?: never;
         options?: never;
         head?: never;
@@ -128,6 +196,8 @@ export interface components {
             delivery_window_days: number;
             /** Format: date-time */
             delivery_due_at: string | null;
+            /** Format: date-time */
+            inspection_deadline_at: string | null;
             realtime_sequence: number;
             external_customer_id: string;
         };
@@ -155,6 +225,40 @@ export interface components {
             email: string;
             document: string;
         };
+        CustomerDeliveryAcceptance: {
+            /** Format: uuid */
+            challenge_id: string;
+            acceptance_token: string;
+        };
+        CustomerDeliveryAcceptanceResponse: {
+            status: string;
+            /** Format: uuid */
+            transfer_id: string;
+        };
+        CustomerOtpRequestResponse: {
+            /** Format: uuid */
+            challenge_id: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        CustomerOtpVerification: {
+            code: string;
+        };
+        CustomerOtpVerificationResponse: {
+            acceptance_token: string;
+        };
+        DeliveryReportResponse: {
+            /** Format: uuid */
+            agreement_id: string;
+            status: components["schemas"]["DeliveryReportResponseStatusEnum"];
+            /** Format: date-time */
+            inspection_deadline_at: string;
+        };
+        /**
+         * @description * `INSPECTION` - INSPECTION
+         * @enum {string}
+         */
+        DeliveryReportResponseStatusEnum: "INSPECTION";
         IntegrationOrganization: {
             organization: components["schemas"]["OrganizationSummary"];
         };
@@ -179,6 +283,8 @@ export interface components {
             delivery_window_days: number;
             /** Format: date-time */
             delivery_due_at: string | null;
+            /** Format: date-time */
+            inspection_deadline_at: string | null;
             realtime_sequence: number;
         };
         PublicCheckoutResponse: {
@@ -264,6 +370,32 @@ export interface operations {
             };
         };
     };
+    reportAgreementDelivery: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Bearer organization API key with agreements:write. */
+                Authorization: string;
+                /** @description Unique key for one delivery declaration. */
+                "Idempotency-Key": string;
+            };
+            path: {
+                agreement_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryReportResponse"];
+                };
+            };
+        };
+    };
     getPublicCheckout: {
         parameters: {
             query?: never;
@@ -281,6 +413,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicCheckoutResponse"];
+                };
+            };
+        };
+    };
+    acceptCustomerDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                checkout_token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomerDeliveryAcceptance"];
+                "application/x-www-form-urlencoded": components["schemas"]["CustomerDeliveryAcceptance"];
+                "multipart/form-data": components["schemas"]["CustomerDeliveryAcceptance"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDeliveryAcceptanceResponse"];
+                };
+            };
+        };
+    };
+    requestCustomerDeliveryAcceptanceOtp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                checkout_token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerOtpRequestResponse"];
+                };
+            };
+        };
+    };
+    verifyCustomerDeliveryAcceptanceOtp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                challenge_id: string;
+                checkout_token: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomerOtpVerification"];
+                "application/x-www-form-urlencoded": components["schemas"]["CustomerOtpVerification"];
+                "multipart/form-data": components["schemas"]["CustomerOtpVerification"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerOtpVerificationResponse"];
                 };
             };
         };

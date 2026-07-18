@@ -7,12 +7,16 @@ from typing import Any, cast
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
+from django.db.models import Sum
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_GET, require_http_methods
 
+from escrow.agreements.models import EscrowAgreement
+from escrow.agreements.money import calculate_release_fee_minor
 from escrow.http import InvalidJsonBody, error_response, parse_json_body, session_required
 from escrow.identity.models import User
+from escrow.ledger.models import LedgerEntry
 from escrow.organizations.models import OrganizationMember
 from escrow.organizations.services import (
     MembershipNotFoundError,
@@ -49,6 +53,7 @@ def current_organization(request: HttpRequest) -> HttpResponse:
     membership = _current(request)
     if isinstance(membership, HttpResponse):
         return membership
+    balances, upcoming_releases = _financial_overview(membership)
     return JsonResponse(
         {
             "organization": {
@@ -57,10 +62,60 @@ def current_organization(request: HttpRequest) -> HttpResponse:
                 "document_masked": None,
             },
             "membership": {"id": str(membership.id), "role": membership.role},
-            "balances": {"held_brl_minor": 0, "available_brl_minor": 0},
-            "upcoming_releases": [],
+            "balances": balances,
+            "upcoming_releases": upcoming_releases,
         }
     )
+
+
+def _financial_overview(
+    membership: OrganizationMember,
+) -> tuple[dict[str, int], list[dict[str, object]]]:
+    organization = membership.organization
+    balances = {
+        "held_brl_minor": _account_balance_minor(organization.id, "ESCROW_LIABILITY", "BRL"),
+        "available_brl_minor": _account_balance_minor(
+            organization.id,
+            "ORGANIZATION_PAYABLE",
+            "BRL",
+        ),
+    }
+    upcoming_releases: list[dict[str, object]] = []
+    agreements = (
+        EscrowAgreement.objects.filter(
+            organization=organization,
+            status=EscrowAgreement.Status.INSPECTION,
+            inspection_deadline_at__isnull=False,
+            currency="BRL",
+        )
+        .order_by("inspection_deadline_at", "id")
+        .only("id", "amount_minor", "currency", "fee_bps", "inspection_deadline_at")
+    )
+    for agreement in agreements:
+        fee_minor = calculate_release_fee_minor(agreement.amount_minor, agreement.fee_bps)
+        deadline = agreement.inspection_deadline_at
+        if deadline is None:
+            continue
+        upcoming_releases.append(
+            {
+                "id": str(agreement.id),
+                "currency": agreement.currency,
+                "gross_minor": agreement.amount_minor,
+                "fee_minor": fee_minor,
+                "net_minor": agreement.amount_minor - fee_minor,
+                "release_at": deadline.isoformat().replace("+00:00", "Z"),
+            }
+        )
+    return balances, upcoming_releases
+
+
+def _account_balance_minor(organization_id: uuid.UUID, account_code: str, currency: str) -> int:
+    entries = LedgerEntry.objects.filter(
+        ledger_transaction__transfer__agreement__organization_id=organization_id,
+        account__code=account_code,
+        currency=currency,
+    ).aggregate(credits=Sum("credit_minor"), debits=Sum("debit_minor"))
+    return int(entries["credits"] or 0) - int(entries["debits"] or 0)
 
 
 @require_http_methods(["GET", "POST"])

@@ -335,6 +335,7 @@ class AgreementCreationApiTests(TestCase):
             "currency",
             "delivery_window_days",
             "delivery_due_at",
+            "inspection_deadline_at",
             "fee_bps",
             "realtime_sequence",
         }

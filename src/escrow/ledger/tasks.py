@@ -13,6 +13,7 @@ from escrow.agreements.lifecycle import (
     mark_funds_held,
 )
 from escrow.agreements.models import EscrowAgreement
+from escrow.agreements.money import MoneyValidationError, calculate_release_fee_minor
 from escrow.audit.services import record_audit_event
 from escrow.ledger.models import LedgerTransaction
 from escrow.ledger.services import (
@@ -23,7 +24,11 @@ from escrow.ledger.services import (
 )
 from escrow.messaging.consumer import PermanentMessageError, consume_envelope_task
 from escrow.messaging.envelope import MessageEnvelope
-from escrow.messaging.topology import LEDGER_FUNDING_QUEUE, LEDGER_REFUND_QUEUE
+from escrow.messaging.topology import (
+    LEDGER_FUNDING_QUEUE,
+    LEDGER_REFUND_QUEUE,
+    LEDGER_RELEASE_QUEUE,
+)
 from escrow.notifications.outbox import enqueue_agreement_status_changed
 from escrow.payments.models import Transfer
 from escrow.risk.models import FundingRiskDecision, FundingRiskReview
@@ -45,6 +50,25 @@ def post_funding(self: Any, body: object) -> bool:
         expected_version=1,
         consumer=LEDGER_FUNDING_QUEUE.name,
         effect=_post_funding,
+    )
+    return result.processed
+
+
+@shared_task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="escrow.ledger.release_funds",
+    queue=LEDGER_RELEASE_QUEUE.name,
+    routing_key=LEDGER_RELEASE_QUEUE.name,
+)
+def release_funds(self: Any, body: object) -> bool:
+    """Post an accepted delivery's gross, fee, and net release exactly once."""
+    result = consume_envelope_task(
+        self,
+        body,
+        expected_type="ReleaseFunds.v1",
+        expected_version=1,
+        consumer=LEDGER_RELEASE_QUEUE.name,
+        effect=_release_funds,
     )
     return result.processed
 
@@ -106,6 +130,62 @@ def _post_funding(envelope: MessageEnvelope) -> None:
         agreement,
         correlation_id=envelope.correlation_id,
         causation_id=str(envelope.message_id),
+    )
+
+
+def _release_funds(envelope: MessageEnvelope) -> None:
+    transfer, agreement = _release_transfer_from(envelope)
+    if transfer.status == Transfer.Status.COMPLETED:
+        if agreement.status != EscrowAgreement.Status.RELEASED:
+            raise PermanentMessageError("completed release agreement is not released")
+        return
+    if (
+        transfer.status != Transfer.Status.PENDING
+        or agreement.status != EscrowAgreement.Status.RELEASE_PENDING
+    ):
+        raise PermanentMessageError("release transfer is not ready for posting")
+    try:
+        fee_minor = calculate_release_fee_minor(agreement.amount_minor, agreement.fee_bps)
+        net_minor = agreement.amount_minor - fee_minor
+        entries = [
+            LedgerEntryInput.debit("ESCROW_LIABILITY", transfer.amount_minor, transfer.currency),
+        ]
+        if net_minor > 0:
+            entries.append(
+                LedgerEntryInput.credit("ORGANIZATION_PAYABLE", net_minor, transfer.currency)
+            )
+        if fee_minor > 0:
+            entries.append(
+                LedgerEntryInput.credit("PLATFORM_FEE_REVENUE", fee_minor, transfer.currency)
+            )
+        post_ledger_transaction(
+            LedgerPosting(
+                transfer_id=transfer.id,
+                kind=LedgerTransaction.Kind.FUNDS_RELEASED,
+                currency=transfer.currency,
+                idempotency_key=f"funds-released:{transfer.id}",
+                entries=tuple(entries),
+            )
+        )
+    except (LedgerPostingValidationError, MoneyValidationError) as error:
+        raise PermanentMessageError("release ledger posting is invalid") from error
+    agreement.status = EscrowAgreement.Status.RELEASED
+    agreement.version += 1
+    agreement.realtime_sequence += 1
+    agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+    transfer.status = Transfer.Status.COMPLETED
+    transfer.save(update_fields=["status", "updated_at"])
+    enqueue_agreement_status_changed(
+        agreement,
+        correlation_id=envelope.correlation_id,
+        causation_id=str(envelope.message_id),
+    )
+    record_audit_event(
+        event_type="funds_released",
+        organization=agreement.organization,
+        agreement=agreement,
+        correlation_id=envelope.correlation_id,
+        payload={"release_transfer_id": str(transfer.id)},
     )
 
 
@@ -186,6 +266,33 @@ def _approved_funding_transfer_from(envelope: MessageEnvelope) -> Transfer:
     ):
         raise PermanentMessageError("funding custody message is outside its tenant or policy")
     return transfer
+
+
+def _release_transfer_from(envelope: MessageEnvelope) -> tuple[Transfer, EscrowAgreement]:
+    payload = envelope.payload
+    if set(payload) != {"agreement_id", "transfer_id"}:
+        raise PermanentMessageError("release payload is invalid")
+    agreement_id = _uuid_payload_value(payload, "agreement_id")
+    transfer_id = _uuid_payload_value(payload, "transfer_id")
+    try:
+        transfer = Transfer.objects.select_for_update().get(id=transfer_id)
+        agreement = (
+            EscrowAgreement.objects.select_for_update()
+            .select_related("organization")
+            .get(id=agreement_id)
+        )
+    except (EscrowAgreement.DoesNotExist, Transfer.DoesNotExist) as error:
+        raise PermanentMessageError("release prerequisite is unknown") from error
+    if (
+        transfer.kind != Transfer.Kind.RELEASE
+        or transfer.agreement_id != agreement.id
+        or transfer.provider != Transfer.Provider.INTERNAL
+        or transfer.amount_minor != agreement.amount_minor
+        or transfer.currency != agreement.currency
+        or str(agreement.organization_id) != envelope.tenant_id
+    ):
+        raise PermanentMessageError("release message is outside its tenant or intent")
+    return transfer, agreement
 
 
 def _rejected_funding_transfer_from(envelope: MessageEnvelope) -> Transfer:

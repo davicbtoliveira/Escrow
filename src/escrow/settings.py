@@ -28,6 +28,8 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "escrow.agreements.apps.AgreementsConfig",
     "escrow.audit.apps.AuditConfig",
+    "escrow.delivery.apps.DeliveryConfig",
+    "escrow.disputes.apps.DisputesConfig",
     "escrow.identity.apps.IdentityConfig",
     "escrow.integrations.apps.IntegrationsConfig",
     "escrow.ledger.apps.LedgerConfig",
@@ -138,14 +140,28 @@ HIBP_MODE = os.environ.get("HIBP_MODE", "mock" if DEBUG else "live")
 HIBP_MOCK_PWNED_PASSWORDS = os.environ.get("HIBP_MOCK_PWNED_PASSWORDS", "")
 HIBP_TIMEOUT_SECONDS = float(os.environ.get("HIBP_TIMEOUT_SECONDS", "3"))
 
-EMAIL_DELIVERY_BACKEND = os.environ.get(
-    "EMAIL_DELIVERY_BACKEND", "django" if DEBUG else "ministack"
-)
+EMAIL_DELIVERY_BACKEND = os.environ.get("EMAIL_DELIVERY_BACKEND", "ministack")
 MINISTACK_ENDPOINT_URL = os.environ.get("MINISTACK_ENDPOINT_URL", "http://localhost:4566")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "000000000000")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "local-development-only")
-SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "noreply@escrow.local")
+SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "no-reply@escrow.local")
+CUSTOMER_OTP_HMAC_SECRET = os.environ.get(
+    "CUSTOMER_OTP_HMAC_SECRET", "local-customer-otp-hmac-only" if DEBUG else ""
+)
+CUSTOMER_OTP_TTL_SECONDS = max(60, int(os.environ.get("CUSTOMER_OTP_TTL_SECONDS", "600")))
+CUSTOMER_OTP_SEND_RATE_LIMIT_MAX = max(
+    1, int(os.environ.get("CUSTOMER_OTP_SEND_RATE_LIMIT_MAX", "5"))
+)
+CUSTOMER_OTP_SEND_RATE_LIMIT_WINDOW_SECONDS = max(
+    1, int(os.environ.get("CUSTOMER_OTP_SEND_RATE_LIMIT_WINDOW_SECONDS", "3600"))
+)
+CUSTOMER_OTP_VERIFY_RATE_LIMIT_MAX = max(
+    1, int(os.environ.get("CUSTOMER_OTP_VERIFY_RATE_LIMIT_MAX", "5"))
+)
+CUSTOMER_OTP_VERIFY_RATE_LIMIT_WINDOW_SECONDS = max(
+    1, int(os.environ.get("CUSTOMER_OTP_VERIFY_RATE_LIMIT_WINDOW_SECONDS", "600"))
+)
 
 API_KEY_HMAC_SECRET = os.environ.get("API_KEY_HMAC_SECRET", SECRET_KEY)
 API_KEY_RATE_LIMIT_MAX = max(1, int(os.environ.get("API_KEY_RATE_LIMIT_MAX", "100")))
@@ -164,6 +180,18 @@ WEBHOOK_RATE_LIMIT_MAX = max(1, int(os.environ.get("WEBHOOK_RATE_LIMIT_MAX", "60
 WEBHOOK_RATE_LIMIT_WINDOW_SECONDS = max(
     1, int(os.environ.get("WEBHOOK_RATE_LIMIT_WINDOW_SECONDS", "60"))
 )
+OUTGOING_WEBHOOK_RATE_LIMIT_MAX = max(
+    1, int(os.environ.get("OUTGOING_WEBHOOK_RATE_LIMIT_MAX", "10"))
+)
+OUTGOING_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS = max(
+    1, int(os.environ.get("OUTGOING_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS", "1"))
+)
+WEBHOOK_DELIVERY_TIMEOUT_SECONDS = max(
+    1.0, float(os.environ.get("WEBHOOK_DELIVERY_TIMEOUT_SECONDS", "5"))
+)
+WEBHOOK_DELIVERY_MAX_AGE_SECONDS = max(
+    60, int(os.environ.get("WEBHOOK_DELIVERY_MAX_AGE_SECONDS", "86400"))
+)
 SANDBOX_PIX_CALLBACK_SIGNING_SECRET = os.environ.get(
     "SANDBOX_PIX_CALLBACK_SIGNING_SECRET",
     "local-sandbox-pix-callback-secret" if DEBUG else "",
@@ -177,7 +205,11 @@ CELERY_BEAT_SCHEDULE = {
     "publish-pending-outbox": {
         "task": "escrow.messaging.publish_outbox_batch",
         "schedule": 1.0,
-    }
+    },
+    "enqueue-due-webhook-deliveries": {
+        "task": "escrow.integrations.enqueue_due_webhook_deliveries",
+        "schedule": 1.0,
+    },
 }
 
 CHANNEL_LAYERS = {

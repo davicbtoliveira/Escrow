@@ -32,3 +32,13 @@ def parse_minor_amount(amount: object, currency: object) -> tuple[int, str]:
 def format_minor_amount(amount_minor: int) -> str:
     """Render a stored minor-unit amount without floating point conversion."""
     return f"{amount_minor // 100}.{amount_minor % 100:02d}"
+
+
+def calculate_release_fee_minor(gross_minor: int, fee_bps: int) -> int:
+    """Calculate the snapshotted platform fee with integer ROUND_HALF_UP semantics."""
+    if type(gross_minor) is not int or gross_minor <= 0:
+        raise MoneyValidationError("gross amount must be positive integer minor units")
+    if type(fee_bps) is not int or not 0 <= fee_bps <= 10_000:
+        raise MoneyValidationError("fee basis points are invalid")
+    quotient, remainder = divmod(gross_minor * fee_bps, 10_000)
+    return quotient + int(remainder * 2 >= 10_000)

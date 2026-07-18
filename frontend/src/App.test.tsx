@@ -33,7 +33,9 @@ function organizationDashboardResponse() {
       upcoming_releases: [
         {
           id: "agr_01",
-          amount_minor: 4900000,
+          gross_minor: 5000000,
+          fee_minor: 100000,
+          net_minor: 4900000,
           currency: "BRL",
           release_at: "2026-07-25T12:00:00Z",
         },
@@ -146,7 +148,10 @@ describe("acesso da organização", () => {
 
     expect(screen.getByText("OWNER")).toBeInTheDocument();
     expect(screen.getByText("Dados somente desta organização")).toBeInTheDocument();
-    expect(screen.getByText(/50\.000,00/)).toBeInTheDocument();
+    expect(screen.getAllByText(/50\.000,00/)).not.toHaveLength(0);
+    const releaseBreakdown = screen.getByText(/Bruto/);
+    expect(releaseBreakdown).toHaveTextContent("Taxa");
+    expect(releaseBreakdown).toHaveTextContent("Líquido");
   });
 
   it("exige confirmação idêntica antes de enviar uma nova senha", () => {

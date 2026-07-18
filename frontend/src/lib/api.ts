@@ -2,7 +2,9 @@ import type { components } from "./generated/openapi";
 
 export type ScheduledRelease = {
   id: string;
-  amount_minor: number;
+  gross_minor: number;
+  fee_minor: number;
+  net_minor: number;
   currency: "BRL";
   release_at: string;
 };
@@ -83,6 +85,20 @@ export type PixChargeResponse = {
     copy_paste: string;
     status: "PENDING" | "CONFIRMED" | "REJECTED";
   };
+};
+
+export type CustomerOtpChallenge = {
+  challenge_id: string;
+  expires_at: string;
+};
+
+export type CustomerAcceptanceAuthorization = {
+  acceptance_token: string;
+};
+
+export type CustomerDeliveryAcceptance = {
+  status: "PROCESSING";
+  transfer_id: string;
 };
 
 export class ApiError extends Error {
@@ -205,12 +221,24 @@ async function publicRequest<T>(path: string): Promise<T> {
   return payload as T;
 }
 
-async function publicPost<T>(path: string, headers: HeadersInit): Promise<T> {
+async function publicPost<T>(
+  path: string,
+  headers: HeadersInit,
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const requestHeaders: Record<string, string> = {
+    Accept: "application/json",
+    ...(headers as Record<string, string>),
+  };
+  if (body) {
+    requestHeaders["Content-Type"] = "application/json";
+  }
   const response = await fetch(path, {
     cache: "no-store",
     credentials: "omit",
-    headers: { Accept: "application/json", ...headers },
+    headers: requestHeaders,
     method: "POST",
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const contentType = response.headers.get("Content-Type") ?? "";
   const payload: unknown = contentType.includes("application/json")
@@ -240,6 +268,9 @@ function isPublicCheckout(value: unknown): value is PublicCheckout {
     (agreement.currency === "BRL" || agreement.currency === "USD") &&
     typeof agreement.delivery_window_days === "number" &&
     (agreement.delivery_due_at === null || typeof agreement.delivery_due_at === "string") &&
+    (agreement.inspection_deadline_at === undefined ||
+      agreement.inspection_deadline_at === null ||
+      typeof agreement.inspection_deadline_at === "string") &&
     typeof agreement.fee_bps === "number" &&
     typeof customer.name === "string" &&
     typeof customer.email_masked === "string" &&
@@ -358,5 +389,57 @@ export const checkoutApi = {
         status: payload.payment.status,
       },
     };
+  },
+
+  async requestDeliveryAcceptanceOtp(token: string): Promise<CustomerOtpChallenge> {
+    const payload = await publicPost<unknown>(
+      `/api/v1/checkout/${encodeURIComponent(token)}/delivery-acceptance/otp/`,
+      {},
+      {},
+    );
+    if (
+      !isRecord(payload) ||
+      typeof payload.challenge_id !== "string" ||
+      typeof payload.expires_at !== "string"
+    ) {
+      throw new ApiError(0, "A confirmação por e-mail retornou uma resposta inválida.");
+    }
+    return { challenge_id: payload.challenge_id, expires_at: payload.expires_at };
+  },
+
+  async verifyDeliveryAcceptanceOtp(
+    token: string,
+    challengeId: string,
+    code: string,
+  ): Promise<CustomerAcceptanceAuthorization> {
+    const payload = await publicPost<unknown>(
+      `/api/v1/checkout/${encodeURIComponent(token)}/delivery-acceptance/otp/${encodeURIComponent(challengeId)}/verify/`,
+      {},
+      { code },
+    );
+    if (!isRecord(payload) || typeof payload.acceptance_token !== "string") {
+      throw new ApiError(0, "A confirmação por e-mail retornou uma resposta inválida.");
+    }
+    return { acceptance_token: payload.acceptance_token };
+  },
+
+  async acceptReportedDelivery(
+    token: string,
+    challengeId: string,
+    acceptanceToken: string,
+  ): Promise<CustomerDeliveryAcceptance> {
+    const payload = await publicPost<unknown>(
+      `/api/v1/checkout/${encodeURIComponent(token)}/delivery-acceptance/`,
+      {},
+      { acceptance_token: acceptanceToken, challenge_id: challengeId },
+    );
+    if (
+      !isRecord(payload) ||
+      payload.status !== "PROCESSING" ||
+      typeof payload.transfer_id !== "string"
+    ) {
+      throw new ApiError(0, "A liberação retornou uma resposta inválida.");
+    }
+    return { status: "PROCESSING", transfer_id: payload.transfer_id };
   },
 };

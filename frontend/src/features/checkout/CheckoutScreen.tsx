@@ -21,6 +21,15 @@ type PixCharge = PixChargeResponse["pix"];
 
 type CheckoutPayment = NonNullable<PublicCheckout["payment"]>;
 
+type DeliveryAcceptanceStage =
+  | "idle"
+  | "sending"
+  | "code"
+  | "verifying"
+  | "authorized"
+  | "accepting"
+  | "submitted";
+
 type CheckoutStatusEvent = {
   agreementId: string;
   sequence: number;
@@ -63,6 +72,16 @@ const checkoutStatus: Record<string, CheckoutStatus> = {
     detail: "O pagamento foi aprovado e permanece protegido até a confirmação de entrega.",
     tone: "held",
   },
+  INSPECTION: {
+    label: "Entrega informada",
+    detail: "Você tem uma janela de inspeção para confirmar a entrega ou abrir uma disputa.",
+    tone: "held",
+  },
+  RELEASE_PENDING: {
+    label: "Liberação em processamento",
+    detail: "Sua confirmação foi recebida e o valor está sendo liberado para a organização.",
+    tone: "review",
+  },
   FUNDING_REJECTED: {
     label: "Pagamento não aprovado",
     detail: "O valor não foi colocado em custódia. Solicite uma nova orientação à organização.",
@@ -82,10 +101,10 @@ const unknownStatus: CheckoutStatus = {
 };
 
 function checkoutStep(status: string): number {
-  if (status === "RELEASED") {
+  if (status === "RELEASED" || status === "RELEASE_PENDING") {
     return 3;
   }
-  if (status === "HELD_IN_ESCROW" || status === "HELD") {
+  if (status === "HELD_IN_ESCROW" || status === "HELD" || status === "INSPECTION") {
     return 2;
   }
   if (
@@ -133,6 +152,17 @@ function deliveryWindow(copy: PublicCheckout["agreement"]): string {
   }
 
   return `${copy.delivery_window_days} dias após a confirmação do pagamento`;
+}
+
+function inspectionWindow(copy: PublicCheckout["agreement"]): string | undefined {
+  if (!copy.inspection_deadline_at) {
+    return undefined;
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "long",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(new Date(copy.inspection_deadline_at));
 }
 
 function paymentFor(checkout: PublicCheckout): CheckoutPayment | undefined {
@@ -186,7 +216,12 @@ function isTerminalStatus(status: string): boolean {
 }
 
 function isProcessingStatus(status: string): boolean {
-  return ["FUNDING_PROCESSING", "PENDING_RISK_REVIEW", "REVIEW_REQUIRED"].includes(status);
+  return [
+    "FUNDING_PROCESSING",
+    "PENDING_RISK_REVIEW",
+    "REVIEW_REQUIRED",
+    "RELEASE_PENDING",
+  ].includes(status);
 }
 
 function idempotencyStorageKey(token: string): string {
@@ -227,6 +262,12 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
   const [pix, setPix] = useState<PixCharge | undefined>();
   const [pixError, setPixError] = useState<string | undefined>();
   const [copyFeedback, setCopyFeedback] = useState<string | undefined>();
+  const [deliveryAcceptanceStage, setDeliveryAcceptanceStage] =
+    useState<DeliveryAcceptanceStage>("idle");
+  const [deliveryChallengeId, setDeliveryChallengeId] = useState<string | undefined>();
+  const [deliveryAcceptanceToken, setDeliveryAcceptanceToken] = useState<string | undefined>();
+  const [deliveryOtpCode, setDeliveryOtpCode] = useState("");
+  const [deliveryAcceptanceError, setDeliveryAcceptanceError] = useState<string | undefined>();
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const lastSequence = useRef<number | undefined>(undefined);
 
@@ -263,6 +304,11 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
     setPix(undefined);
     setPixError(undefined);
     setCopyFeedback(undefined);
+    setDeliveryAcceptanceStage("idle");
+    setDeliveryChallengeId(undefined);
+    setDeliveryAcceptanceToken(undefined);
+    setDeliveryOtpCode("");
+    setDeliveryAcceptanceError(undefined);
     void loadCheckout();
   }, [loadCheckout]);
 
@@ -399,6 +445,57 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
     }
   }, []);
 
+  const handleRequestDeliveryOtp = useCallback(async () => {
+    setDeliveryAcceptanceStage("sending");
+    setDeliveryAcceptanceError(undefined);
+    try {
+      const challenge = await checkoutApi.requestDeliveryAcceptanceOtp(token);
+      setDeliveryChallengeId(challenge.challenge_id);
+      setDeliveryAcceptanceStage("code");
+    } catch {
+      setDeliveryAcceptanceStage("idle");
+      setDeliveryAcceptanceError("Não foi possível enviar o código agora. Tente novamente.");
+    }
+  }, [token]);
+
+  const handleVerifyDeliveryOtp = useCallback(async () => {
+    if (!deliveryChallengeId) {
+      return;
+    }
+    setDeliveryAcceptanceStage("verifying");
+    setDeliveryAcceptanceError(undefined);
+    try {
+      const authorization = await checkoutApi.verifyDeliveryAcceptanceOtp(
+        token,
+        deliveryChallengeId,
+        deliveryOtpCode,
+      );
+      setDeliveryAcceptanceToken(authorization.acceptance_token);
+      setDeliveryAcceptanceStage("authorized");
+    } catch {
+      setDeliveryAcceptanceStage("code");
+      setDeliveryAcceptanceError(
+        "Código inválido ou expirado. Solicite outro código se necessário.",
+      );
+    }
+  }, [deliveryChallengeId, deliveryOtpCode, token]);
+
+  const handleAcceptDelivery = useCallback(async () => {
+    if (!deliveryChallengeId || !deliveryAcceptanceToken) {
+      return;
+    }
+    setDeliveryAcceptanceStage("accepting");
+    setDeliveryAcceptanceError(undefined);
+    try {
+      await checkoutApi.acceptReportedDelivery(token, deliveryChallengeId, deliveryAcceptanceToken);
+      setDeliveryAcceptanceStage("submitted");
+      void loadCheckout("refresh");
+    } catch {
+      setDeliveryAcceptanceStage("authorized");
+      setDeliveryAcceptanceError("Não foi possível iniciar a liberação agora. Tente novamente.");
+    }
+  }, [deliveryAcceptanceToken, deliveryChallengeId, loadCheckout, token]);
+
   if (state.status === "loading") {
     return <CheckoutLoading />;
   }
@@ -480,6 +577,18 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
             />
           ) : null}
 
+          {readyAgreement.status === "INSPECTION" ? (
+            <DeliveryAcceptancePanel
+              code={deliveryOtpCode}
+              error={deliveryAcceptanceError}
+              onAccept={() => void handleAcceptDelivery()}
+              onCodeChange={setDeliveryOtpCode}
+              onRequestOtp={() => void handleRequestDeliveryOtp()}
+              onVerifyOtp={() => void handleVerifyDeliveryOtp()}
+              stage={deliveryAcceptanceStage}
+            />
+          ) : null}
+
           <dl className="checkout-details">
             <div>
               <dt>Pagador</dt>
@@ -497,6 +606,12 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
               <dt>Prazo para entrega</dt>
               <dd>{deliveryWindow(readyAgreement)}</dd>
             </div>
+            {inspectionWindow(readyAgreement) ? (
+              <div>
+                <dt>Inspeção até</dt>
+                <dd>{inspectionWindow(readyAgreement)}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Taxa de custódia</dt>
               <dd>{displayFee(readyAgreement.fee_bps)}</dd>
@@ -513,6 +628,92 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
         </section>
       </section>
     </main>
+  );
+}
+
+function DeliveryAcceptancePanel({
+  code,
+  error,
+  onAccept,
+  onCodeChange,
+  onRequestOtp,
+  onVerifyOtp,
+  stage,
+}: {
+  code: string;
+  error: string | undefined;
+  onAccept: () => void;
+  onCodeChange: (value: string) => void;
+  onRequestOtp: () => void;
+  onVerifyOtp: () => void;
+  stage: DeliveryAcceptanceStage;
+}) {
+  const isRequesting = stage === "sending";
+  const isVerifying = stage === "verifying";
+  const isAccepting = stage === "accepting";
+  const isCodeStage = stage === "code" || isVerifying;
+
+  return (
+    <section className="delivery-acceptance" aria-labelledby="delivery-acceptance-title">
+      <p className="checkout-pix-kicker">CONFIRMAÇÃO DA ENTREGA</p>
+      <h2 id="delivery-acceptance-title">Recebeu o pedido?</h2>
+      <p>Para proteger seu pagamento, confirme a entrega com o código enviado para o seu e-mail.</p>
+
+      {stage === "idle" || isRequesting ? (
+        <button
+          className="primary-action checkout-pix-action"
+          disabled={isRequesting}
+          type="button"
+          onClick={onRequestOtp}
+        >
+          {isRequesting ? "Enviando código…" : "Receber código por e-mail"}
+        </button>
+      ) : null}
+
+      {isCodeStage ? (
+        <div className="delivery-acceptance-code">
+          <label htmlFor="delivery-acceptance-code">Código de confirmação</label>
+          <input
+            autoComplete="one-time-code"
+            id="delivery-acceptance-code"
+            inputMode="numeric"
+            maxLength={6}
+            onChange={(event) => onCodeChange(event.target.value.replace(/\D/g, ""))}
+            value={code}
+          />
+          <button
+            className="secondary-action checkout-pix-copy-action"
+            disabled={isVerifying || code.length !== 6}
+            type="button"
+            onClick={onVerifyOtp}
+          >
+            {isVerifying ? "Validando código…" : "Validar código"}
+          </button>
+        </div>
+      ) : null}
+
+      {stage === "authorized" || isAccepting ? (
+        <button
+          className="primary-action checkout-pix-action"
+          disabled={isAccepting}
+          type="button"
+          onClick={onAccept}
+        >
+          {isAccepting ? "Iniciando liberação…" : "Confirmar entrega"}
+        </button>
+      ) : null}
+
+      {stage === "submitted" ? (
+        <p className="checkout-pix-feedback" role="status">
+          Confirmação recebida. A liberação está sendo processada.
+        </p>
+      ) : null}
+      {error ? (
+        <p className="checkout-pix-feedback checkout-pix-feedback-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
 

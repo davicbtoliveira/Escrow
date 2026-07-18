@@ -71,6 +71,61 @@
                 }
             }
         },
+        "/api/v1/agreements/{agreement_id}/delivery/": {
+            "post": {
+                "operationId": "reportAgreementDelivery",
+                "description": "Let the owning organization begin its customer's inspection window.",
+                "parameters": [
+                    {
+                        "in": "header",
+                        "name": "Authorization",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Bearer organization API key with agreements:write.",
+                        "required": true
+                    },
+                    {
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Unique key for one delivery declaration.",
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "agreement_id",
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "agreements"
+                ],
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DeliveryReportResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
         "/api/v1/checkout/{checkout_token}/": {
             "get": {
                 "operationId": "getPublicCheckout",
@@ -94,6 +149,148 @@
                             "application/json": {
                                 "schema": {
                                     "$ref": "#/components/schemas/PublicCheckoutResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/v1/checkout/{checkout_token}/delivery-acceptance/": {
+            "post": {
+                "operationId": "acceptCustomerDelivery",
+                "description": "Asynchronously request release after a fresh customer email verification.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "checkout_token",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "checkout"
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CustomerDeliveryAcceptance"
+                            }
+                        },
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CustomerDeliveryAcceptance"
+                            }
+                        },
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CustomerDeliveryAcceptance"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CustomerDeliveryAcceptanceResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/v1/checkout/{checkout_token}/delivery-acceptance/otp/": {
+            "post": {
+                "operationId": "requestCustomerDeliveryAcceptanceOtp",
+                "description": "Email the customer a proof required before they can release held funds.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "checkout_token",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "checkout"
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CustomerOtpRequestResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/v1/checkout/{checkout_token}/delivery-acceptance/otp/{challenge_id}/verify/": {
+            "post": {
+                "operationId": "verifyCustomerDeliveryAcceptanceOtp",
+                "description": "Turn a valid emailed code into a short-lived one-time acceptance proof.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "challenge_id",
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid"
+                        },
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "checkout_token",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "checkout"
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CustomerOtpVerification"
+                            }
+                        },
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CustomerOtpVerification"
+                            }
+                        },
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CustomerOtpVerification"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CustomerOtpVerificationResponse"
                                 }
                             }
                         },
@@ -308,6 +505,11 @@
                         "format": "date-time",
                         "nullable": true
                     },
+                    "inspection_deadline_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
                     "realtime_sequence": {
                         "type": "integer",
                         "minimum": 0
@@ -325,6 +527,7 @@
                     "external_customer_id",
                     "fee_bps",
                     "id",
+                    "inspection_deadline_at",
                     "realtime_sequence",
                     "status"
                 ]
@@ -402,6 +605,107 @@
                     "name"
                 ]
             },
+            "CustomerDeliveryAcceptance": {
+                "type": "object",
+                "properties": {
+                    "challenge_id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "acceptance_token": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "acceptance_token",
+                    "challenge_id"
+                ]
+            },
+            "CustomerDeliveryAcceptanceResponse": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string"
+                    },
+                    "transfer_id": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                "required": [
+                    "status",
+                    "transfer_id"
+                ]
+            },
+            "CustomerOtpRequestResponse": {
+                "type": "object",
+                "properties": {
+                    "challenge_id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "expires_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                },
+                "required": [
+                    "challenge_id",
+                    "expires_at"
+                ]
+            },
+            "CustomerOtpVerification": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "maxLength": 6,
+                        "minLength": 6
+                    }
+                },
+                "required": [
+                    "code"
+                ]
+            },
+            "CustomerOtpVerificationResponse": {
+                "type": "object",
+                "properties": {
+                    "acceptance_token": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "acceptance_token"
+                ]
+            },
+            "DeliveryReportResponse": {
+                "type": "object",
+                "properties": {
+                    "agreement_id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/DeliveryReportResponseStatusEnum"
+                    },
+                    "inspection_deadline_at": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                },
+                "required": [
+                    "agreement_id",
+                    "inspection_deadline_at",
+                    "status"
+                ]
+            },
+            "DeliveryReportResponseStatusEnum": {
+                "enum": [
+                    "INSPECTION"
+                ],
+                "type": "string",
+                "description": "* `INSPECTION` - INSPECTION"
+            },
             "IntegrationOrganization": {
                 "type": "object",
                 "properties": {
@@ -478,6 +782,11 @@
                         "format": "date-time",
                         "nullable": true
                     },
+                    "inspection_deadline_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
                     "realtime_sequence": {
                         "type": "integer",
                         "minimum": 0
@@ -491,6 +800,7 @@
                     "delivery_window_days",
                     "fee_bps",
                     "id",
+                    "inspection_deadline_at",
                     "realtime_sequence",
                     "status"
                 ]
