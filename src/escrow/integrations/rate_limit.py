@@ -91,6 +91,53 @@ def check_webhook_rate_limit(
     )
 
 
+def check_customer_otp_send_rate_limit(
+    agreement_id: str,
+    *,
+    now_timestamp: float | None = None,
+) -> RateLimitDecision:
+    """Allow at most five customer OTP sends per agreement every hour."""
+    return _check_token_bucket(
+        redis_key=f"rate-limit:customer-otp-send:{sha256(agreement_id.encode()).hexdigest()}",
+        max_requests=settings.CUSTOMER_OTP_SEND_RATE_LIMIT_MAX,
+        window_seconds=settings.CUSTOMER_OTP_SEND_RATE_LIMIT_WINDOW_SECONDS,
+        burst=0,
+        now_timestamp=now_timestamp,
+    )
+
+
+def check_customer_otp_verify_rate_limit(
+    challenge_id: str,
+    *,
+    now_timestamp: float | None = None,
+) -> RateLimitDecision:
+    """Add Redis throttling to the model-enforced five attempts per OTP code."""
+    return _check_token_bucket(
+        redis_key=f"rate-limit:customer-otp-verify:{sha256(challenge_id.encode()).hexdigest()}",
+        max_requests=settings.CUSTOMER_OTP_VERIFY_RATE_LIMIT_MAX,
+        window_seconds=settings.CUSTOMER_OTP_VERIFY_RATE_LIMIT_WINDOW_SECONDS,
+        burst=0,
+        now_timestamp=now_timestamp,
+    )
+
+
+def check_outgoing_webhook_rate_limit(
+    organization_id: str,
+    host: str,
+    *,
+    now_timestamp: float | None = None,
+) -> RateLimitDecision:
+    """Limit one organization/destination host to ten queued deliveries per second."""
+    source = f"{organization_id}:{host.casefold()}"
+    return _check_token_bucket(
+        redis_key=f"rate-limit:webhook-outgoing:{sha256(source.encode()).hexdigest()}",
+        max_requests=settings.OUTGOING_WEBHOOK_RATE_LIMIT_MAX,
+        window_seconds=settings.OUTGOING_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
+        burst=0,
+        now_timestamp=now_timestamp,
+    )
+
+
 def _check_token_bucket(
     *,
     redis_key: str,
