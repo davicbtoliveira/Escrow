@@ -38,6 +38,7 @@ function organizationDashboardResponse() {
           release_at: "2026-07-25T12:00:00Z",
         },
       ],
+      api_keys: [],
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );

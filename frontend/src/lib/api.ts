@@ -20,6 +20,43 @@ export type CurrentOrganization = {
   upcoming_releases: ScheduledRelease[];
 };
 
+export const apiKeyScopes = [
+  "agreements:write",
+  "agreements:read",
+  "payments:write",
+  "payments:read",
+  "webhooks:manage",
+] as const;
+
+export type ApiKeyScope = (typeof apiKeyScopes)[number];
+
+export type OrganizationApiKey = {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: ApiKeyScope[];
+  expires_at: string | null;
+  last_used_at: string | null;
+  last_used_ip: string | null;
+  status: "ACTIVE" | "EXPIRED" | "REVOKED";
+};
+
+export type ApiKeyListResponse = {
+  api_keys: OrganizationApiKey[];
+};
+
+export type ApiKeySecretResponse = {
+  api_key: OrganizationApiKey;
+  previous_api_key?: OrganizationApiKey;
+  secret: string;
+};
+
+export type CreateApiKeyInput = {
+  name: string;
+  scopes: ApiKeyScope[];
+  expires_at?: string;
+};
+
 export type RegisterInput = {
   organization_name: string;
   email: string;
@@ -131,7 +168,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   return payload as T;
 }
 
-async function post<T>(path: string, body?: Record<string, string>): Promise<T> {
+async function post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
   const token = await ensureCsrfToken();
   const headers = new Headers({ Accept: "application/json", "X-CSRFToken": token });
 
@@ -172,5 +209,29 @@ export const organizationApi = {
       method: "GET",
       headers: { Accept: "application/json" },
     });
+  },
+
+  apiKeys(): Promise<ApiKeyListResponse> {
+    return request<ApiKeyListResponse>("/api/v1/organizations/current/api-keys/", {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+  },
+
+  createApiKey(input: CreateApiKeyInput): Promise<ApiKeySecretResponse> {
+    return post<ApiKeySecretResponse>("/api/v1/organizations/current/api-keys/", input);
+  },
+
+  rotateApiKey(apiKeyId: string, overlapSeconds?: number): Promise<ApiKeySecretResponse> {
+    return post<ApiKeySecretResponse>(
+      `/api/v1/organizations/current/api-keys/${apiKeyId}/rotate/`,
+      overlapSeconds !== undefined ? { overlap_seconds: overlapSeconds } : {},
+    );
+  },
+
+  revokeApiKey(apiKeyId: string): Promise<{ api_key: OrganizationApiKey }> {
+    return post<{ api_key: OrganizationApiKey }>(
+      `/api/v1/organizations/current/api-keys/${apiKeyId}/revoke/`,
+    );
   },
 };

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, type CurrentOrganization, organizationApi } from "../../lib/api";
+import { ApiKeyPanel } from "../integrations/ApiKeyPanel";
 
 type OrganizationDashboardProps = {
   onLogout: () => void;
@@ -193,6 +194,8 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
           <p className="empty-release">Nenhuma liberação está prevista para esta organização.</p>
         )}
       </section>
+
+      {membership.role === "OWNER" ? <ApiKeyPanel /> : null}
     </main>
   );
 }

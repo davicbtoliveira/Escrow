@@ -19,4 +19,4 @@ COPY src ./src
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uv run --no-sync python manage.py migrate --noinput && uv run --no-sync daphne -b 0.0.0.0 -p 8000 escrow.asgi:application"]
+CMD ["sh", "-c", "uv run --no-sync python manage.py migrate --noinput && uv run --no-sync daphne --access-log /dev/null -b 0.0.0.0 -p 8000 escrow.asgi:application"]

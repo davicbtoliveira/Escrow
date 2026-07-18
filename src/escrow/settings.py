@@ -24,12 +24,15 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "drf_spectacular",
     "escrow.identity.apps.IdentityConfig",
+    "escrow.integrations.apps.IntegrationsConfig",
     "escrow.organizations.apps.OrganizationsConfig",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "escrow.correlation.CorrelationIdMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -135,3 +138,49 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", "000000000000")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "local-development-only")
 SES_FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "noreply@escrow.local")
+
+API_KEY_HMAC_SECRET = os.environ.get("API_KEY_HMAC_SECRET", SECRET_KEY)
+API_KEY_RATE_LIMIT_MAX = max(1, int(os.environ.get("API_KEY_RATE_LIMIT_MAX", "100")))
+API_KEY_RATE_LIMIT_WINDOW_SECONDS = max(
+    1, int(os.environ.get("API_KEY_RATE_LIMIT_WINDOW_SECONDS", "60"))
+)
+API_KEY_RATE_LIMIT_BURST = max(0, int(os.environ.get("API_KEY_RATE_LIMIT_BURST", "20")))
+API_KEY_ROTATION_OVERLAP_SECONDS = max(
+    0, int(os.environ.get("API_KEY_ROTATION_OVERLAP_SECONDS", "3600"))
+)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"json": {"()": "escrow.logging.JsonFormatter"}},
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json",
+            "stream": "ext://sys.stdout",
+        }
+    },
+    "loggers": {
+        "escrow": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
+
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "EXCEPTION_HANDLER": "escrow.http.drf_exception_handler",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Escrow Integration API",
+    "VERSION": "v1",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "APPEND_COMPONENTS": {
+        "securitySchemes": {
+            "ApiKeyAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "escrow API key",
+            }
+        }
+    },
+}
