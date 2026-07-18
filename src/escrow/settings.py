@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -25,6 +26,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
+    "escrow.agreements.apps.AgreementsConfig",
     "escrow.identity.apps.IdentityConfig",
     "escrow.integrations.apps.IntegrationsConfig",
     "escrow.organizations.apps.OrganizationsConfig",
@@ -147,6 +149,27 @@ API_KEY_RATE_LIMIT_WINDOW_SECONDS = max(
 API_KEY_RATE_LIMIT_BURST = max(0, int(os.environ.get("API_KEY_RATE_LIMIT_BURST", "20")))
 API_KEY_ROTATION_OVERLAP_SECONDS = max(
     0, int(os.environ.get("API_KEY_ROTATION_OVERLAP_SECONDS", "3600"))
+)
+PUBLIC_CHECKOUT_RATE_LIMIT_MAX = max(1, int(os.environ.get("PUBLIC_CHECKOUT_RATE_LIMIT_MAX", "60")))
+PUBLIC_CHECKOUT_RATE_LIMIT_WINDOW_SECONDS = max(
+    1, int(os.environ.get("PUBLIC_CHECKOUT_RATE_LIMIT_WINDOW_SECONDS", "60"))
+)
+
+PII_ENCRYPTION_BACKEND = os.environ.get("PII_ENCRYPTION_BACKEND", "local" if DEBUG else "kms")
+PII_KMS_KEY_ID = os.environ.get("PII_KMS_KEY_ID", "alias/escrow-local-application")
+PII_BLIND_INDEX_SECRET = os.environ.get(
+    "PII_BLIND_INDEX_SECRET", "local-pii-blind-index-only" if DEBUG else ""
+)
+PII_LOCAL_MASTER_KEY = os.environ.get(
+    "PII_LOCAL_MASTER_KEY", "local-pii-master-key-only" if DEBUG else ""
+)
+PII_LOCAL_ENCRYPTION_ALLOWED = DEBUG or "pytest" in sys.modules or "test" in sys.argv
+CHECKOUT_TOKEN_HMAC_SECRET = os.environ.get(
+    "CHECKOUT_TOKEN_HMAC_SECRET", "local-checkout-token-key-only" if DEBUG else ""
+)
+AGREEMENT_IDEMPOTENCY_HMAC_SECRET = os.environ.get(
+    "AGREEMENT_IDEMPOTENCY_HMAC_SECRET",
+    "local-agreement-idempotency-hmac-key-only" if DEBUG else "",
 )
 
 LOGGING = {

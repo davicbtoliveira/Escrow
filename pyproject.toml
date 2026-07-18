@@ -5,6 +5,7 @@ description = "A realistic B2B2C escrow custody simulation."
 requires-python = ">=3.13,<3.14"
 dependencies = [
   "boto3>=1.35,<2",
+  "cryptography>=44,<50",
   "Django>=5.2,<5.3",
   "djangorestframework>=3.16,<3.17",
   "drf-spectacular>=0.29,<1",

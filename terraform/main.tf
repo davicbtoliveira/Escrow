@@ -52,7 +52,7 @@ resource "aws_kms_key" "application" {
 }
 
 resource "aws_kms_alias" "application" {
-  name          = "alias/escrow-local-application"
+  name          = var.application_kms_alias
   target_key_id = aws_kms_key.application.key_id
 }
 

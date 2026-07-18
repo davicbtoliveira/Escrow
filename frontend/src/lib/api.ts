@@ -1,3 +1,5 @@
+import type { components } from "./generated/openapi";
+
 export type ScheduledRelease = {
   id: string;
   amount_minor: number;
@@ -70,6 +72,9 @@ export type PasswordRecoveryConfirmationInput = {
   password: string;
   password_confirmation: string;
 };
+
+/** Generated from the backend OpenAPI contract via `bun run api:generate`. */
+export type PublicCheckout = components["schemas"]["PublicCheckoutResponse"];
 
 export class ApiError extends Error {
   constructor(
@@ -168,6 +173,52 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   return payload as T;
 }
 
+async function publicRequest<T>(path: string): Promise<T> {
+  const response = await fetch(path, {
+    cache: "no-store",
+    credentials: "omit",
+    headers: { Accept: "application/json" },
+    method: "GET",
+  });
+  const contentType = response.headers.get("Content-Type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json().catch(() => undefined)
+    : undefined;
+
+  if (!response.ok) {
+    throw new ApiError(response.status, responseMessage(payload));
+  }
+
+  if (!isRecord(payload)) {
+    throw new ApiError(0, "O checkout retornou uma resposta inválida.");
+  }
+
+  return payload as T;
+}
+
+function isPublicCheckout(value: unknown): value is PublicCheckout {
+  if (!isRecord(value) || !isRecord(value.agreement)) {
+    return false;
+  }
+  const agreement = value.agreement;
+  if (!isRecord(agreement.customer)) {
+    return false;
+  }
+  const customer = agreement.customer;
+  return (
+    typeof agreement.id === "string" &&
+    typeof agreement.status === "string" &&
+    typeof agreement.amount === "string" &&
+    (agreement.currency === "BRL" || agreement.currency === "USD") &&
+    typeof agreement.delivery_window_days === "number" &&
+    (agreement.delivery_due_at === null || typeof agreement.delivery_due_at === "string") &&
+    typeof agreement.fee_bps === "number" &&
+    typeof customer.name === "string" &&
+    typeof customer.email_masked === "string" &&
+    typeof customer.document_masked === "string"
+  );
+}
+
 async function post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
   const token = await ensureCsrfToken();
   const headers = new Headers({ Accept: "application/json", "X-CSRFToken": token });
@@ -233,5 +284,15 @@ export const organizationApi = {
     return post<{ api_key: OrganizationApiKey }>(
       `/api/v1/organizations/current/api-keys/${apiKeyId}/revoke/`,
     );
+  },
+};
+
+export const checkoutApi = {
+  async get(token: string): Promise<PublicCheckout> {
+    const payload = await publicRequest<unknown>(`/api/v1/checkout/${encodeURIComponent(token)}/`);
+    if (!isPublicCheckout(payload)) {
+      throw new ApiError(0, "O checkout retornou uma resposta inválida.");
+    }
+    return payload;
   },
 };

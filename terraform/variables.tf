@@ -50,6 +50,17 @@ variable "application_secret_name" {
   default     = "/escrow/local/application"
 }
 
+variable "application_kms_alias" {
+  type        = string
+  description = "KMS alias consumed by the application for simulated PII envelope encryption."
+  default     = "alias/escrow-local-application"
+
+  validation {
+    condition     = can(regex("^alias/[A-Za-z0-9/_-]+$", var.application_kms_alias))
+    error_message = "application_kms_alias must be a valid KMS alias starting with alias/."
+  }
+}
+
 variable "application_secret_values" {
   type        = map(string)
   description = "Application secrets persisted only in ignored local Terraform state."

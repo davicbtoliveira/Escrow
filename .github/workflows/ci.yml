@@ -35,6 +35,8 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun test
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:e2e
       - run: bun run build
 
   terraform:
@@ -42,14 +44,50 @@ jobs:
     defaults:
       run:
         working-directory: terraform
+    env:
+      TF_VAR_aws_access_key: "000000000000"
+      TF_VAR_aws_secret_key: test
+      TF_VAR_application_secret_values: >-
+        {"DJANGO_SECRET_KEY":"ci-local-development-only","WEBHOOK_SIGNING_SECRET":"ci-local-webhook-secret","PII_BLIND_INDEX_SECRET":"ci-local-pii-blind-index-secret","CHECKOUT_TOKEN_HMAC_SECRET":"ci-local-checkout-token-key","AGREEMENT_IDEMPOTENCY_HMAC_SECRET":"ci-local-agreement-idempotency-hmac"}
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.12.2"
       - run: terraform fmt -check -recursive
+      - name: Start MiniStack
+        run: |
+          docker run --detach --name escrow-ministack-ci --publish 4566:4566 \
+            --env AWS_ACCESS_KEY_ID=000000000000 \
+            --env AWS_SECRET_ACCESS_KEY=test \
+            --env MINISTACK_HOST=127.0.0.1 \
+            --env MINISTACK_REGION=us-east-1 \
+            --env MINISTACK_WORKER_THREADS=8 \
+            --env PERSIST_STATE=0 \
+            --env SERVICES=ses,secretsmanager,kms \
+            ministackorg/ministack:1.4.1
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:4566/_ministack/ready; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs escrow-ministack-ci
+          exit 1
       - run: terraform init -backend=false -input=false
       - run: terraform validate
+      - name: Apply and verify local KMS alias
+        run: |
+          set -euo pipefail
+          terraform apply -auto-approve -input=false
+          test "$(terraform output -raw application_kms_key_alias)" = "alias/escrow-local-application"
+          terraform output -raw application_kms_key_arn | grep -Eq '^arn:'
+      - name: Destroy local Terraform resources
+        if: always()
+        run: terraform destroy -auto-approve -input=false || true
+      - name: Stop MiniStack
+        if: always()
+        run: docker rm --force escrow-ministack-ci || true
 
   compose-smoke:
     runs-on: ubuntu-latest

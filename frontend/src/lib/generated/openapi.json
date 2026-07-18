@@ -1,0 +1,372 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "Escrow Integration API",
+        "version": "v1"
+    },
+    "paths": {
+        "/api/v1/agreements/": {
+            "post": {
+                "operationId": "createAgreement",
+                "description": "Create an immutable agreement through a scoped organization API key.",
+                "parameters": [
+                    {
+                        "in": "header",
+                        "name": "Authorization",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Bearer esk_<prefix>_<secret>",
+                        "required": true
+                    },
+                    {
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Unique key for one organization agreement creation command.",
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "agreements"
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AgreementCreate"
+                            }
+                        },
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AgreementCreate"
+                            }
+                        },
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/AgreementCreate"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AgreementCreationResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/v1/checkout/{checkout_token}/": {
+            "get": {
+                "operationId": "getPublicCheckout",
+                "description": "Return a bounded public snapshot for one opaque checkout capability.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "checkout_token",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "checkout"
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PublicCheckoutResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/v1/integrations/organization/": {
+            "get": {
+                "operationId": "getIntegrationOrganization",
+                "description": "Example tenant-scoped API endpoint used to verify bearer-key contracts.",
+                "parameters": [
+                    {
+                        "in": "header",
+                        "name": "Authorization",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Bearer esk_<prefix>_<secret>",
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "integrations"
+                ],
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/IntegrationOrganization"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Agreement": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "customer": {
+                        "$ref": "#/components/schemas/MaskedCustomer"
+                    },
+                    "amount": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "$ref": "#/components/schemas/CurrencyEnum"
+                    },
+                    "fee_bps": {
+                        "type": "integer"
+                    },
+                    "delivery_window_days": {
+                        "type": "integer"
+                    },
+                    "delivery_due_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    },
+                    "external_customer_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "amount",
+                    "currency",
+                    "customer",
+                    "delivery_due_at",
+                    "delivery_window_days",
+                    "external_customer_id",
+                    "fee_bps",
+                    "id",
+                    "status"
+                ]
+            },
+            "AgreementCreate": {
+                "type": "object",
+                "properties": {
+                    "external_customer_id": {
+                        "type": "string"
+                    },
+                    "customer": {
+                        "$ref": "#/components/schemas/CustomerCreate"
+                    },
+                    "amount": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "$ref": "#/components/schemas/CurrencyEnum"
+                    },
+                    "delivery_window_days": {
+                        "type": "integer",
+                        "maximum": 90,
+                        "minimum": 1
+                    }
+                },
+                "required": [
+                    "amount",
+                    "currency",
+                    "customer",
+                    "delivery_window_days",
+                    "external_customer_id"
+                ]
+            },
+            "AgreementCreationResponse": {
+                "type": "object",
+                "properties": {
+                    "agreement": {
+                        "$ref": "#/components/schemas/Agreement"
+                    },
+                    "checkout_url": {
+                        "type": "string",
+                        "format": "uri"
+                    }
+                },
+                "required": [
+                    "agreement",
+                    "checkout_url"
+                ]
+            },
+            "CurrencyEnum": {
+                "enum": [
+                    "BRL",
+                    "USD"
+                ],
+                "type": "string",
+                "description": "* `BRL` - BRL\n* `USD` - USD"
+            },
+            "CustomerCreate": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "email": {
+                        "type": "string",
+                        "format": "email"
+                    },
+                    "document": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "document",
+                    "email",
+                    "name"
+                ]
+            },
+            "IntegrationOrganization": {
+                "type": "object",
+                "properties": {
+                    "organization": {
+                        "$ref": "#/components/schemas/OrganizationSummary"
+                    }
+                },
+                "required": [
+                    "organization"
+                ]
+            },
+            "MaskedCustomer": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "email_masked": {
+                        "type": "string"
+                    },
+                    "document_masked": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "document_masked",
+                    "email_masked",
+                    "name"
+                ]
+            },
+            "OrganizationSummary": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "id",
+                    "name"
+                ]
+            },
+            "PublicAgreement": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "customer": {
+                        "$ref": "#/components/schemas/MaskedCustomer"
+                    },
+                    "amount": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "$ref": "#/components/schemas/CurrencyEnum"
+                    },
+                    "fee_bps": {
+                        "type": "integer"
+                    },
+                    "delivery_window_days": {
+                        "type": "integer"
+                    },
+                    "delivery_due_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "amount",
+                    "currency",
+                    "customer",
+                    "delivery_due_at",
+                    "delivery_window_days",
+                    "fee_bps",
+                    "id",
+                    "status"
+                ]
+            },
+            "PublicCheckoutResponse": {
+                "type": "object",
+                "properties": {
+                    "agreement": {
+                        "$ref": "#/components/schemas/PublicAgreement"
+                    }
+                },
+                "required": [
+                    "agreement"
+                ]
+            }
+        },
+        "securitySchemes": {
+            "ApiKeyAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "escrow API key"
+            }
+        }
+    }
+}

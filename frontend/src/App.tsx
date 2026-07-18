@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { type AccessRoute, AccessScreen } from "./features/access/AccessScreen";
+import { CheckoutScreen } from "./features/checkout/CheckoutScreen";
 import { OrganizationDashboard } from "./features/organizations/OrganizationDashboard";
 import "./styles.css";
 
 type ReadinessState = "checking" | "ready" | "degraded";
-type AppRoute = "/" | "/dashboard" | AccessRoute;
+type CheckoutRoute = { kind: "checkout"; token: string };
+type AppRoute = "/" | "/dashboard" | AccessRoute | CheckoutRoute;
+type NavigableRoute = Exclude<AppRoute, CheckoutRoute>;
 
 type ReadinessCopy = {
   detail: string;
@@ -37,6 +40,16 @@ function hasReadyStatus(payload: unknown): payload is { status: "ready" } {
 
 function routeFromPath(pathname: string): AppRoute {
   const normalizedPath = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
+  const checkoutMatch = normalizedPath.match(/^\/checkout\/([^/]+)$/);
+
+  if (checkoutMatch) {
+    try {
+      return { kind: "checkout", token: decodeURIComponent(checkoutMatch[1]) };
+    } catch {
+      return "/";
+    }
+  }
+
   if (
     normalizedPath === "/login" ||
     normalizedPath === "/recuperar" ||
@@ -60,10 +73,14 @@ export default function App() {
     return () => window.removeEventListener("popstate", handleHistoryNavigation);
   }, []);
 
-  const navigate = useCallback((nextRoute: AppRoute) => {
+  const navigate = useCallback((nextRoute: NavigableRoute) => {
     window.history.pushState({}, "", nextRoute);
     setRoute(nextRoute);
   }, []);
+
+  if (typeof route === "object") {
+    return <CheckoutScreen token={route.token} />;
+  }
 
   if (route === "/dashboard") {
     return (
@@ -92,7 +109,7 @@ export default function App() {
   return <ReadinessLanding onNavigate={navigate} />;
 }
 
-function ReadinessLanding({ onNavigate }: { onNavigate: (route: AppRoute) => void }) {
+function ReadinessLanding({ onNavigate }: { onNavigate: (route: NavigableRoute) => void }) {
   const [readiness, setReadiness] = useState<ReadinessState>("checking");
 
   const checkReadiness = useCallback(async () => {

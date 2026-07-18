@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import cast
 
 import redis
@@ -51,11 +52,41 @@ def check_api_key_rate_limit(
     now_timestamp: float | None = None,
 ) -> RateLimitDecision:
     """Apply the ADR's atomic 100/minute token bucket with a 20-request burst."""
+    return _check_token_bucket(
+        redis_key=f"rate-limit:api-key:{key_id}",
+        max_requests=settings.API_KEY_RATE_LIMIT_MAX,
+        window_seconds=settings.API_KEY_RATE_LIMIT_WINDOW_SECONDS,
+        burst=settings.API_KEY_RATE_LIMIT_BURST,
+        now_timestamp=now_timestamp,
+    )
+
+
+def check_public_checkout_rate_limit(
+    ip_address: str,
+    *,
+    now_timestamp: float | None = None,
+) -> RateLimitDecision:
+    """Apply the public-checkout quota without placing a raw IP in the Redis key."""
+    return _check_token_bucket(
+        redis_key=f"rate-limit:checkout:{sha256(ip_address.encode()).hexdigest()}",
+        max_requests=settings.PUBLIC_CHECKOUT_RATE_LIMIT_MAX,
+        window_seconds=settings.PUBLIC_CHECKOUT_RATE_LIMIT_WINDOW_SECONDS,
+        burst=0,
+        now_timestamp=now_timestamp,
+    )
+
+
+def _check_token_bucket(
+    *,
+    redis_key: str,
+    max_requests: int,
+    window_seconds: int,
+    burst: int,
+    now_timestamp: float | None,
+) -> RateLimitDecision:
     now = time.time() if now_timestamp is None else now_timestamp
-    window = settings.API_KEY_RATE_LIMIT_WINDOW_SECONDS
-    refill_per_second = settings.API_KEY_RATE_LIMIT_MAX / window
-    capacity = settings.API_KEY_RATE_LIMIT_MAX + settings.API_KEY_RATE_LIMIT_BURST
-    redis_key = f"rate-limit:api-key:{key_id}"
+    refill_per_second = max_requests / window_seconds
+    capacity = max_requests + burst
     client = redis.Redis.from_url(settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1)
     result = cast(
         list[int],

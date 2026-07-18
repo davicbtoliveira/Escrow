@@ -22,3 +22,8 @@ output "application_kms_key_arn" {
   description = "KMS key ARN used for local simulated envelope encryption."
   value       = aws_kms_key.application.arn
 }
+
+output "application_kms_key_alias" {
+  description = "KMS alias the application uses to encrypt simulated PII."
+  value       = aws_kms_alias.application.name
+}

@@ -5,4 +5,7 @@ aws_secret_key = "test"
 application_secret_values = {
   DJANGO_SECRET_KEY      = "local-development-only-change-me"
   WEBHOOK_SIGNING_SECRET = "local-webhook-secret-change-me"
+  PII_BLIND_INDEX_SECRET = "local-pii-blind-index-secret-change-me"
+  CHECKOUT_TOKEN_HMAC_SECRET = "local-checkout-token-key-only"
+  AGREEMENT_IDEMPOTENCY_HMAC_SECRET = "local-agreement-idempotency-hmac-key-only"
 }

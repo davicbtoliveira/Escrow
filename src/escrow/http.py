@@ -52,8 +52,15 @@ _ERROR_MESSAGES = {
     "api_key_scope_forbidden": "A API key não possui o escopo necessário.",
     "api_key_rate_limited": "Limite de requisições da API key atingido.",
     "api_key_rate_limit_unavailable": "O controle de limite está indisponível.",
+    "idempotency_key_required": "A chave de idempotência é obrigatória.",
+    "idempotency_key_reused": "A chave de idempotência já foi usada com outra solicitação.",
+    "idempotency_unavailable": "A proteção de idempotência está indisponível.",
     "method_not_allowed": "Método HTTP não permitido neste recurso.",
+    "not_found": "O recurso não foi encontrado.",
     "organization_role_forbidden": "Seu papel não permite esta ação.",
+    "pii_encryption_unavailable": "A proteção de dados sensíveis está indisponível.",
+    "public_checkout_rate_limited": "Limite de acesso ao checkout atingido.",
+    "public_checkout_rate_limit_unavailable": "O controle de limite do checkout está indisponível.",
     "validation_error": "Existem campos inválidos.",
 }
 

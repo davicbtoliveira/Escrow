@@ -70,6 +70,28 @@ services:
       retries: 20
       start_period: 10s
 
+  terraform:
+    image: hashicorp/terraform:1.12.2
+    working_dir: /workspace
+    entrypoint:
+      - sh
+      - -ec
+      - |
+        terraform init -input=false
+        terraform apply -auto-approve -input=false
+    environment:
+      TF_VAR_ministack_endpoint: http://ministack:4566
+      TF_VAR_aws_access_key: "000000000000"
+      TF_VAR_aws_secret_key: test
+      TF_VAR_application_secret_values: >-
+        {"DJANGO_SECRET_KEY":"local-development-only-not-a-secret","WEBHOOK_SIGNING_SECRET":"local-webhook-signing-secret","PII_BLIND_INDEX_SECRET":"local-pii-blind-index-secret-change-me","CHECKOUT_TOKEN_HMAC_SECRET":"local-checkout-token-key-only","AGREEMENT_IDEMPOTENCY_HMAC_SECRET":"local-agreement-idempotency-hmac-key-only"}
+    command: []
+    volumes:
+      - ./terraform:/workspace
+    depends_on:
+      ministack:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -87,6 +109,11 @@ services:
       AWS_ACCESS_KEY_ID: "000000000000"
       AWS_SECRET_ACCESS_KEY: test
       SES_FROM_EMAIL: no-reply@escrow.local
+      PII_ENCRYPTION_BACKEND: kms
+      PII_KMS_KEY_ID: alias/escrow-local-application
+      PII_BLIND_INDEX_SECRET: local-pii-blind-index-secret-change-me
+      CHECKOUT_TOKEN_HMAC_SECRET: local-checkout-token-key-only
+      AGREEMENT_IDEMPOTENCY_HMAC_SECRET: local-agreement-idempotency-hmac-key-only
     ports:
       - "8000:8000"
     depends_on:
@@ -98,6 +125,8 @@ services:
         condition: service_healthy
       ministack:
         condition: service_healthy
+      terraform:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [

@@ -13,6 +13,7 @@ from django.http import HttpRequest, HttpResponse
 
 _CORRELATION_ID = ContextVar("correlation_id", default="")
 _VALID_CORRELATION_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_CHECKOUT_PATH = re.compile(r"^/api/v1/checkout/[^/]+/?$")
 logger = logging.getLogger("escrow.request")
 
 
@@ -40,24 +41,26 @@ class CorrelationIdMiddleware:
         try:
             response = self.get_response(request)
         except Exception:
+            http_path = _redact_checkout_request_path(request)
             logger.error(
                 "http_request_failed",
                 extra={
                     "correlation_id": correlation_id,
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                     "http_method": request.method,
-                    "http_path": request.path,
+                    "http_path": http_path,
                 },
             )
             raise
         else:
+            http_path = _redact_checkout_request_path(request)
             logger.info(
                 "http_request_completed",
                 extra={
                     "correlation_id": correlation_id,
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                     "http_method": request.method,
-                    "http_path": request.path,
+                    "http_path": http_path,
                     "http_status": response.status_code,
                 },
             )
@@ -65,3 +68,14 @@ class CorrelationIdMiddleware:
             return response
         finally:
             _CORRELATION_ID.reset(token)
+
+
+def _redact_checkout_request_path(request: HttpRequest) -> str:
+    """Remove an opaque checkout capability before any later middleware can log it."""
+    if _CHECKOUT_PATH.fullmatch(request.path) is None:
+        return request.path
+    redacted_path = "/api/v1/checkout/[redacted]/"
+    request.path = redacted_path
+    request.path_info = redacted_path
+    request.META["QUERY_STRING"] = ""
+    return redacted_path
