@@ -58,6 +58,36 @@ def mark_funds_held(agreement_id: UUID) -> EscrowAgreement:
     )
 
 
+def mark_funding_review_required(agreement_id: UUID) -> EscrowAgreement:
+    """Expose a policy-required human review without moving funds into custody."""
+    return _transition(
+        agreement_id,
+        expected={EscrowAgreement.Status.FUNDING_PROCESSING},
+        target=EscrowAgreement.Status.REVIEW_REQUIRED,
+    )
+
+
+def resume_funding_after_review(agreement_id: UUID) -> EscrowAgreement:
+    """Return an analyst-approved payment to the normal custody command path."""
+    return _transition(
+        agreement_id,
+        expected={EscrowAgreement.Status.REVIEW_REQUIRED},
+        target=EscrowAgreement.Status.FUNDING_PROCESSING,
+    )
+
+
+def mark_funding_rejected(agreement_id: UUID) -> EscrowAgreement:
+    """Record the terminal customer-visible result after the pending-risk return posts."""
+    return _transition(
+        agreement_id,
+        expected={
+            EscrowAgreement.Status.FUNDING_PROCESSING,
+            EscrowAgreement.Status.REVIEW_REQUIRED,
+        },
+        target=EscrowAgreement.Status.FUNDING_REJECTED,
+    )
+
+
 def _transition(
     agreement_id: UUID,
     *,

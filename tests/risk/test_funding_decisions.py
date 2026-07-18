@@ -8,9 +8,9 @@ from django.utils import timezone
 from escrow.agreements.models import EscrowAgreement
 from escrow.organizations.models import Organization
 from escrow.payments.models import Transfer
-from escrow.risk.models import FundingRiskDecision
+from escrow.risk.models import FundingRiskDecision, FundingRiskPolicy
 from escrow.risk.policy import FundingRiskOutcome
-from escrow.risk.services import evaluate_funding_transfer
+from escrow.risk.services import evaluate_funding_transfer, funding_policy_configuration
 
 
 def funded_transfer(*, blocked: bool = False, amount_minor: int = 50_000) -> Transfer:
@@ -76,3 +76,31 @@ class FundingRiskDecisionTests(TestCase):
 
         assert decision.outcome == FundingRiskOutcome.REJECTED
         assert decision.reasons == ["ORGANIZATION_BLOCKED"]
+
+    def test_persists_the_versioned_policy_snapshot_for_reproducible_replays(self) -> None:
+        transfer = funded_transfer(amount_minor=50_000)
+        configuration = funding_policy_configuration()
+        high_amount_minor = configuration["high_amount_minor"]
+        assert isinstance(high_amount_minor, dict)
+        high_amount_minor["BRL"] = 50_000
+        weights = configuration["weights"]
+        assert isinstance(weights, dict)
+        weights["high_amount"] = 40
+        policy = FundingRiskPolicy.objects.create(
+            version="funding-risk-v2",
+            configuration=configuration,
+        )
+
+        first = evaluate_funding_transfer(
+            transfer.id,
+            now=timezone.now(),
+            policy_version=policy.version,
+        )
+        replay = evaluate_funding_transfer(transfer.id, now=timezone.now())
+
+        assert first.id == replay.id
+        assert first.policy_id == policy.id
+        assert first.policy_version == "funding-risk-v2"
+        assert first.policy_configuration == configuration
+        assert first.score == 40
+        assert first.outcome == FundingRiskOutcome.REVIEW_REQUIRED

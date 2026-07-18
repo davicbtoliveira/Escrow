@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 from escrow.payments.models import Transfer
@@ -32,6 +33,7 @@ class FundingRiskDecision(models.Model):
         related_name="decisions",
     )
     policy_version = models.CharField(max_length=64)
+    policy_configuration = models.JSONField()
     inputs = models.JSONField()
     score = models.PositiveSmallIntegerField()
     reasons = models.JSONField(default=list)
@@ -50,4 +52,48 @@ class FundingRiskDecision(models.Model):
                 condition=models.Q(outcome__in=["APPROVED", "REVIEW_REQUIRED", "REJECTED"]),
                 name="risk_funding_outcome_is_known",
             ),
+        ]
+
+
+class FundingRiskReview(models.Model):
+    """One attributable human resolution of a policy-required funding review."""
+
+    class Outcome(models.TextChoices):
+        APPROVED = "APPROVED", "Approved"
+        REJECTED = "REJECTED", "Rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    decision = models.OneToOneField(
+        FundingRiskDecision,
+        on_delete=models.PROTECT,
+        related_name="manual_review",
+    )
+    analyst = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="funding_risk_reviews",
+    )
+    command_id = models.CharField(max_length=128, unique=True)
+    outcome = models.CharField(max_length=16, choices=Outcome.choices)
+    rationale = models.TextField(max_length=1_000)
+    reviewed_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["reviewed_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(outcome__in=["APPROVED", "REJECTED"]),
+                name="risk_funding_review_outcome_is_known",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(command_id=""),
+                name="risk_funding_review_command_id_not_empty",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["outcome", "reviewed_at"],
+                name="risk_review_outcome_01d9fd_idx",
+            )
         ]

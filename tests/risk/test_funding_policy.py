@@ -39,6 +39,18 @@ def test_policy_uses_exact_amount_and_velocity_boundaries() -> None:
     assert review.reasons == ("HIGH_AMOUNT", "CUSTOMER_VELOCITY")
 
 
+def test_policy_uses_exact_review_and_rejection_score_boundaries() -> None:
+    review = evaluate_funding_policy(inputs(amount_minor=5_000_000, organization_age_days=6))
+    rejected = evaluate_funding_policy(
+        inputs(customer_payments_last_60_seconds=3, organization_dispute_rate_bps=1_001)
+    )
+
+    assert review.score == 40
+    assert review.outcome is FundingRiskOutcome.REVIEW_REQUIRED
+    assert rejected.score == 70
+    assert rejected.outcome is FundingRiskOutcome.REJECTED
+
+
 def test_policy_handles_usd_age_and_dispute_rate_boundaries() -> None:
     usd = evaluate_funding_policy(inputs(amount_minor=1_000_000, currency="USD"))
     age_boundary = evaluate_funding_policy(inputs(organization_age_days=7))
@@ -65,3 +77,45 @@ def test_policy_rejects_blocked_organizations_immediately() -> None:
     assert result.outcome is FundingRiskOutcome.REJECTED
     assert result.score == 0
     assert result.reasons == ("ORGANIZATION_BLOCKED",)
+
+
+def test_policy_uses_a_versioned_configuration_snapshot() -> None:
+    configuration = {
+        "high_amount_minor": {"BRL": 100, "USD": 200},
+        "customer_payments_last_60_seconds": 2,
+        "organization_age_days": 10,
+        "organization_dispute_rate_bps": 500,
+        "weights": {
+            "high_amount": 10,
+            "customer_velocity": 35,
+            "young_organization": 5,
+            "high_dispute_rate": 30,
+        },
+        "review_score_min": 35,
+        "reject_score_min": 65,
+    }
+
+    result = evaluate_funding_policy(
+        inputs(amount_minor=100, customer_payments_last_60_seconds=2),
+        policy_version="funding-risk-v2",
+        configuration=configuration,
+    )
+
+    assert result.policy_version == "funding-risk-v2"
+    assert result.score == 45
+    assert result.outcome is FundingRiskOutcome.REVIEW_REQUIRED
+    assert result.reasons == ("HIGH_AMOUNT", "CUSTOMER_VELOCITY")
+
+
+def test_policy_caps_multiple_indicators_at_a_hundred() -> None:
+    result = evaluate_funding_policy(
+        inputs(
+            amount_minor=5_000_000,
+            customer_payments_last_60_seconds=3,
+            organization_age_days=6,
+            organization_dispute_rate_bps=1_001,
+        )
+    )
+
+    assert result.score == 100
+    assert result.outcome is FundingRiskOutcome.REJECTED

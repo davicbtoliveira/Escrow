@@ -14,6 +14,7 @@ urlpatterns = [
     path("health/ready/", readiness, name="health-ready"),
     path("api/v1/auth/", include("escrow.identity.urls")),
     path("api/v1/integrations/", include("escrow.integrations.urls")),
+    path("api/v1/operations/risk/", include("escrow.risk.urls")),
     path("api/v1/organizations/", include("escrow.organizations.urls")),
     path("api/v1/agreements/", agreement_views.agreement_collection, name="agreement-collection"),
     path(

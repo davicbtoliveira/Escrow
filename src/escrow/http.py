@@ -66,6 +66,8 @@ _ERROR_MESSAGES = {
     "sandbox_charge_conflict": "A cobrança PIX não pode ser criada neste estado.",
     "sandbox_control_unavailable": "O controle PIX simulado não está disponível.",
     "sandbox_duplicate_unavailable": "Ainda não existe um callback para repetir.",
+    "risk_analyst_required": "A função de analista de risco é obrigatória.",
+    "funding_review_conflict": "A análise de risco já não pode ser alterada.",
     "webhook_rate_limited": "Limite de chamadas do webhook atingido.",
     "webhook_rate_limit_unavailable": "O controle de limite do webhook está indisponível.",
     "validation_error": "Existem campos inválidos.",
