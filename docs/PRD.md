@@ -112,34 +112,34 @@ The full system runs locally through Docker Compose using Django, React, Bun, Po
 - Use direct Django ORM instead of generic repository abstractions. Do not implement full CQRS or event sourcing.
 - Model `EscrowAgreement`, `Transfer`, `LedgerTransaction`/`LedgerEntry`, and `Dispute` separately.
 - Use explicit agreement, transfer, and dispute state machines. Reject invalid transitions with HTTP `409`.
-- Require a delivery deadline 1–90 days after payment, a seven-day inspection window, immediate release on acceptance, automatic release on inactivity, and automatic refund when delivery expires.
+- Accept and snapshot a `delivery_window_days` value from 1–90 on agreement creation; on confirmed PIX, derive `delivery_due_at` from `confirmed_at + delivery_window_days`. Keep the seven-day inspection window, immediate release on acceptance, automatic release on inactivity, and automatic refund when delivery expires.
 - Do not offer guaranteed post-release refunds in the MVP.
 - Protect acceptance/dispute/scheduler races with PostgreSQL row locks, optimistic versions, uniqueness constraints, and a final ledger-state check.
 - Implement an append-only double-entry ledger with deferred PostgreSQL balance validation, no cascading deletion, and reversing entries for corrections.
 - Record confirmed PIX in `FUNDS_PENDING_RISK`; approval moves it to `ESCROW_LIABILITY`, rejection returns it through `PIX_CLEARING`, and manual review leaves it pending.
 - Store money in integer minor units. Accept decimal strings at the API boundary. Support BRL and USD without transactional FX or combined balances.
 - Make currency toggle display-only using timestamped simulated rates.
-- Apply a snapshotted, configurable organization fee at release; seed a 2% default.
+- Apply a snapshotted, configurable organization fee as integer basis points at release; seed `200` bps (2%) and calculate the minor-unit fee with `ROUND_HALF_UP`.
 - Use RabbitMQ and Celery with explicit command/event exchanges, named queues, queue-specific DLQs, JSON-only messages, and no Celery result backend.
 - Treat RabbitMQ as at-least-once. Use transactional outbox, publisher confirms, consumer inbox, unique message IDs, correlation/causation IDs, and idempotent effects.
 - Retry transient failures five times with exponential backoff/jitter; route permanent or exhausted failures to DLQ; replay only through an audited command.
 - Use periodic PostgreSQL deadline scans rather than long-lived Celery ETA tasks.
-- Use deterministic, explainable, versioned risk policies. Funding produces approved, review-required, or rejected.
-- Generate a dispute risk report for every dispute, including explicit no-suspicion outcomes.
+- Use deterministic, explainable, versioned risk policies. Funding produces approved, review-required, or rejected; `REVIEW_REQUIRED` expires 24 calendar hours after confirmed PIX and then safely rejects/refunds if an analyst has not decided.
+- Generate a dispute risk report for every dispute, including explicit no-suspicion outcomes and informative duplicate-evidence, customer-history/timing, organization-history/rate, and timeline flags. It cannot decide or move funds.
 - Combine risk and dispute analysis in `RISK_DISPUTE_ANALYST`; reserve final movement authority for `PLATFORM_ADMIN`.
 - Apply a 72-hour calendar dispute SLA: on-track below 48 hours, at-risk from 48–72, overdue after 72, stopped by final admin decision.
-- Expose REST JSON under `/api/v1`, generate OpenAPI, require API keys and mutation idempotency keys, use cursor pagination, and return stable structured errors.
-- Hash API keys, show values once, scope them, allow two active keys per organization, and support expiry/rotation/revocation.
-- Deliver signed outgoing webhooks at least once, retry for 24 hours, preserve per-agreement sequence, and expose replay.
+- Expose REST JSON under `/api/v1`, generate OpenAPI, require API keys and idempotency keys for agreement creation and every money-affecting mutation, use cursor pagination, and return stable structured errors. A same-scope key with the same canonical payload returns its stored response; a different payload returns `409 idempotency_key_reused` with no side effect.
+- Hash API keys, show values once, scope them (`agreements:write`, `agreements:read`, `payments:write`, `payments:read`, `webhooks:manage`), allow two active keys per organization, and support expiry/rotation/revocation.
+- Deliver signed outgoing webhooks at least once, retry for 24 hours, preserve monotonically assigned per-agreement sequence, and expose replay. Sequence detects gaps but does not promise ordered arrival; consumers reconcile through the authoritative API snapshot.
 - Use rate limits backed by Redis for B2B API, login, OTP, public checkout, and outgoing webhooks. Rate limits cannot determine financial correctness.
 - Use Django Channels with Redis for WebSockets. PostgreSQL is authoritative; reconnect and sequence gaps trigger an HTTP refetch, with polling fallback.
-- Use Django session cookies for human auth, CSRF, strict tenant authorization, and role-based least privilege.
+- Use Django session cookies for human auth, CSRF, strict tenant authorization, and role-based least privilege. Provision demo platform staff only through an explicit idempotent management command with supplied secrets; never seed default credentials at startup.
 - Validate strong passwords and check HIBP through five-character k-anonymity with padded responses. Fail closed in production registration and use a dev/test mock.
 - Require name, email, external customer ID, and validated CPF/CNPJ. Encrypt sensitive values with MiniStack KMS envelope encryption/AES-GCM, store blind-index HMACs, mask by default, and audit decryption.
 - Follow an OWASP ASVS 5.0 Level 2-inspired baseline without compliance claims. Include CSP, secure cookies, CORS/CSRF controls, SSRF-safe webhook validation, safe uploads, and CI security scans.
 - Exclude ClamAV locally because of resource cost in a controlled fictional-data environment; keep production malware scanning deferred.
 - Keep PostgreSQL authoritative; use Redis only for caches, Channels, rate limits, and non-financial short locks.
-- Store private evidence in Ceph RGW; store metadata and SHA-256 in PostgreSQL; authorize every download.
+- Store private evidence in Ceph RGW; store metadata and SHA-256 in PostgreSQL; authorize every download. A customer may download only their own dispute evidence after checkout-token and fresh OTP verification, through a short-lived pre-signed URL with an audit event; organizations cannot download it.
 - Use MiniStack only for SES, Secrets Manager, and KMS. Do not substitute its S3/SQS/RDS/ElastiCache for Ceph/RabbitMQ/PostgreSQL/Redis.
 - Use Terraform against MiniStack with configurable endpoint and local ignored state. Document remote locked state and real AWS gaps as future work.
 - Build one React 19.2 strict-TypeScript SPA with organization, operations, and checkout route shells.
@@ -187,7 +187,7 @@ The full system runs locally through Docker Compose using Django, React, Bun, Po
 
 ## Further Notes
 
-- ADRs 0001–0012 are authoritative for initial architecture and scope. Future changes should supersede decisions with new ADRs rather than silently rewriting accepted records.
+- ADRs 0001–0013 are authoritative for initial architecture and scope. Future changes should supersede decisions with new ADRs rather than silently rewriting accepted records.
 - The project and product name **Escrow** is provisional.
 - All demo seeds and screenshots must use fictional identities and values.
 - The README must include startup requirements, architecture diagrams, message flow, ledger examples, cloud mapping, security limitations, and an explicit “not production financial software” warning.

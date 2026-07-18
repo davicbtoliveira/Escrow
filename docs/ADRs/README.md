@@ -18,6 +18,7 @@ These ADRs capture the initial product and architecture decisions for a realisti
 | [0010](0010-frontend-and-design-system.md) | React frontend and visual direction | Accepted |
 | [0011](0011-quality-and-observability.md) | Testing, CI, and observability | Accepted |
 | [0012](0012-delivery-strategy.md) | Delivery sequence and deferred scope | Accepted |
+| [0013](0013-mvp-operational-contract-clarifications.md) | MVP operational contract clarifications | Accepted |
 
 ## Conventions
 
@@ -25,4 +26,3 @@ These ADRs capture the initial product and architecture decisions for a realisti
 - The initial UI locale is `pt-BR`; the frontend must remain ready for later `en-US` localization.
 - An accepted ADR is changed by a new ADR that supersedes it, not by silently rewriting the original decision.
 - Technical versions are baselines, not permission to ignore security patch updates.
-
