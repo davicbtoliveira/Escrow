@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import NoReturn, Protocol
 
 from celery.exceptions import Reject  # type: ignore[import-untyped]
 
+from escrow.messaging.dlq import capture_dead_letter_message
 from escrow.messaging.envelope import EnvelopeValidationError, MessageEnvelope
 from escrow.messaging.outbox import MessageProcessingResult, process_message_once
 
@@ -82,16 +83,70 @@ def consume_envelope_task(
             consumer=consumer,
             effect=effect,
         )
+    except Reject as rejection:
+        try:
+            _capture_rejection(task, body=body, routing_key=consumer, rejection=rejection)
+        except TransientMessageError as error:
+            _retry_or_reject(task, body=body, routing_key=consumer, error=error, jitter=jitter)
+            raise AssertionError("retry or rejection must not return")
+        raise
     except TransientMessageError as error:
-        retry_count = task.request.retries
-        if type(retry_count) is not int or retry_count < 0:
-            raise RuntimeError("Celery task retry count is invalid") from error
-        if retry_count >= MAX_TRANSIENT_RETRIES:
-            raise Reject(f"retry_exhausted:{type(error).__name__}", requeue=False) from error
-        backoff = float(min(2**retry_count, 60))
-        retry_jitter = (jitter or _jitter)(backoff)
-        task.retry(exc=error, countdown=backoff + retry_jitter)
-        raise AssertionError("Celery retry must not return")
+        _retry_or_reject(task, body=body, routing_key=consumer, error=error, jitter=jitter)
+        raise AssertionError("retry or rejection must not return")
+
+
+def _retry_or_reject(
+    task: RetryingTask,
+    *,
+    body: object,
+    routing_key: str,
+    error: TransientMessageError,
+    jitter: Callable[[float], float] | None,
+) -> NoReturn:
+    retry_count = task.request.retries
+    if type(retry_count) is not int or retry_count < 0:
+        raise RuntimeError("Celery task retry count is invalid") from error
+    if retry_count >= MAX_TRANSIENT_RETRIES:
+        rejection = Reject(f"retry_exhausted:{type(error).__name__}", requeue=False)
+        try:
+            _capture_rejection(task, body=body, routing_key=routing_key, rejection=rejection)
+        except TransientMessageError as capture_error:
+            raise Reject("dead_letter_metadata_unavailable", requeue=True) from capture_error
+        raise rejection from error
+    backoff = float(min(2**retry_count, 60))
+    retry_jitter = (jitter or _jitter)(backoff)
+    task.retry(exc=error, countdown=backoff + retry_jitter)
+    raise AssertionError("Celery retry must not return")
+
+
+def _capture_rejection(
+    task: RetryingTask,
+    *,
+    body: object,
+    routing_key: str,
+    rejection: Reject,
+) -> None:
+    request = task.request
+    retries = request.retries
+    if type(retries) is not int or retries < 0:
+        raise RuntimeError("Celery task retry count is invalid")
+    headers = getattr(request, "headers", None)
+    if not isinstance(headers, Mapping):
+        headers = {}
+    source_task_id = getattr(request, "id", "")
+    if not isinstance(source_task_id, str):
+        source_task_id = ""
+    try:
+        capture_dead_letter_message(
+            body=body,
+            routing_key=routing_key,
+            error=str(rejection.reason),
+            attempt_count=retries + 1,
+            source_task_id=source_task_id,
+            headers=headers,
+        )
+    except Exception as error:
+        raise TransientMessageError("dead-letter metadata storage is unavailable") from error
 
 
 def _jitter(backoff: float) -> float:

@@ -56,6 +56,10 @@ ALL_QUEUES = PRIMARY_QUEUES + DEAD_LETTER_QUEUES
 _EXCHANGE_BY_ROUTING_KEY = {queue.name: queue.exchange for queue in PRIMARY_QUEUES}
 
 _QUEUE_BY_ROUTING_KEY = {queue.name: queue for queue in PRIMARY_QUEUES}
+_DEAD_LETTER_QUEUE_BY_ROUTING_KEY = {
+    primary_queue.name: dead_letter_queue
+    for primary_queue, dead_letter_queue in zip(PRIMARY_QUEUES, DEAD_LETTER_QUEUES, strict=True)
+}
 _TASK_NAME_BY_ROUTING_KEY = {
     OUTBOX_PUBLISHER_QUEUE.name: "escrow.messaging.publish_outbox_batch",
     RISK_FUNDING_QUEUE.name: "escrow.risk.evaluate_funding_risk",
@@ -71,6 +75,10 @@ CELERY_TASK_ROUTES = {
     task_name: {"queue": routing_key, "routing_key": routing_key}
     for routing_key, task_name in _TASK_NAME_BY_ROUTING_KEY.items()
 }
+CELERY_TASK_ROUTES["escrow.integrations.enqueue_due_webhook_deliveries"] = {
+    "queue": OUTBOX_PUBLISHER_QUEUE.name,
+    "routing_key": OUTBOX_PUBLISHER_QUEUE.name,
+}
 
 
 def exchange_for_routing_key(routing_key: str) -> Exchange:
@@ -85,6 +93,14 @@ def queue_for_routing_key(routing_key: str) -> Queue:
     """Return the declared queue used to publish one explicitly routed task."""
     try:
         return _QUEUE_BY_ROUTING_KEY[routing_key]
+    except KeyError as error:
+        raise ValueError(f"unsupported messaging route: {routing_key}") from error
+
+
+def dead_letter_queue_for_routing_key(routing_key: str) -> Queue:
+    """Return the declared queue that receives rejected deliveries for one route."""
+    try:
+        return _DEAD_LETTER_QUEUE_BY_ROUTING_KEY[routing_key]
     except KeyError as error:
         raise ValueError(f"unsupported messaging route: {routing_key}") from error
 
