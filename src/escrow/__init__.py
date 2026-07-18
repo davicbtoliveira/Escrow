@@ -1,0 +1,1 @@
+"""Escrow application composition root."""

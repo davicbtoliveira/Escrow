@@ -1,0 +1,480 @@
+:root {
+  color: #cdd6f4;
+  background: #11111b;
+  font-family: "Manrope", "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: #11111b;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 12% 4%, rgb(203 166 247 / 14%), transparent 28rem),
+    radial-gradient(circle at 91% 88%, rgb(137 180 250 / 10%), transparent 25rem), #11111b;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #f9e2af;
+  outline-offset: 4px;
+}
+
+.app-shell {
+  width: min(100%, 1320px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 34px 48px 48px;
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 10;
+  top: 12px;
+  left: 12px;
+  padding: 10px 14px;
+  color: #11111b;
+  background: #f9e2af;
+  border-radius: 8px;
+  transform: translateY(-170%);
+  transition: transform 150ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 34px;
+  border-bottom: 1px solid rgb(205 214 244 / 13%);
+}
+
+.brand-lockup {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  color: #cdd6f4;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.79rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+}
+
+.brand-mark {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 5px);
+  gap: 3px;
+  align-items: end;
+  height: 18px;
+  padding: 2px;
+  border: 1px solid #cba6f7;
+  transform: skewY(-14deg);
+}
+
+.brand-mark i {
+  display: block;
+  width: 3px;
+  background: #cba6f7;
+}
+
+.brand-mark i:nth-child(1) {
+  height: 5px;
+}
+
+.brand-mark i:nth-child(2) {
+  height: 10px;
+}
+
+.brand-mark i:nth-child(3) {
+  height: 13px;
+}
+
+.environment-label,
+.eyebrow,
+.panel-kicker,
+.rail-heading span {
+  margin: 0;
+  color: #a6adc8;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.control-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 410px);
+  gap: clamp(48px, 8vw, 136px);
+  align-items: center;
+  min-height: calc(100vh - 125px);
+  padding: 72px 0;
+}
+
+.introduction {
+  max-width: 710px;
+}
+
+.eyebrow {
+  color: #cba6f7;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2 {
+  font-family: "Instrument Serif", Georgia, serif;
+  font-weight: 400;
+}
+
+h1 {
+  max-width: 660px;
+  margin: 20px 0 24px;
+  color: #f5e0dc;
+  font-size: clamp(3.8rem, 6.2vw, 6.7rem);
+  line-height: 0.88;
+  letter-spacing: -0.055em;
+}
+
+.lede {
+  max-width: 560px;
+  margin-bottom: 58px;
+  color: #bac2de;
+  font-size: clamp(1rem, 1.4vw, 1.15rem);
+  line-height: 1.7;
+}
+
+.custody-rail {
+  position: relative;
+  max-width: 650px;
+  padding: 20px 22px 24px;
+  overflow: hidden;
+  background: linear-gradient(125deg, rgb(49 50 68 / 72%), rgb(24 24 37 / 76%));
+  border: 1px solid rgb(203 166 247 / 25%);
+  border-radius: 18px;
+  box-shadow: 0 24px 55px rgb(0 0 0 / 18%);
+}
+
+.custody-rail::after {
+  position: absolute;
+  top: 59px;
+  right: 38px;
+  left: 38px;
+  height: 1px;
+  content: "";
+  background: linear-gradient(90deg, #cba6f7 0%, #cba6f7 13%, #45475a 13%, #45475a 100%);
+}
+
+.rail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 27px;
+}
+
+.rail-heading p {
+  margin: 0;
+  color: #cdd6f4;
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+.rail-heading span {
+  color: #6c7086;
+  font-size: 0.58rem;
+}
+
+.custody-rail ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  position: relative;
+  z-index: 1;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.custody-rail li {
+  display: grid;
+  gap: 7px;
+}
+
+.rail-node {
+  width: 13px;
+  height: 13px;
+  margin-bottom: 9px;
+  background: #313244;
+  border: 2px solid #6c7086;
+  border-radius: 50%;
+}
+
+.rail-node-active {
+  background: #cba6f7;
+  border-color: #f5e0dc;
+  box-shadow: 0 0 0 5px rgb(203 166 247 / 15%);
+}
+
+.custody-rail strong {
+  color: #cdd6f4;
+  font-size: 0.77rem;
+}
+
+.custody-rail small {
+  color: #a6adc8;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.62rem;
+}
+
+.status-panel {
+  padding: clamp(26px, 4vw, 40px);
+  background: linear-gradient(155deg, rgb(49 50 68 / 88%), rgb(24 24 37 / 96%));
+  border: 1px solid rgb(205 214 244 / 16%);
+  border-radius: 22px;
+  box-shadow: 0 30px 80px rgb(0 0 0 / 28%);
+}
+
+.panel-kicker {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: #a6adc8;
+}
+
+.panel-kicker span {
+  color: #cba6f7;
+  font-size: 0.74rem;
+}
+
+.panel-kicker p {
+  margin: 0;
+}
+
+h2 {
+  margin: 23px 0 10px;
+  color: #f5e0dc;
+  font-size: clamp(2.4rem, 4vw, 3.4rem);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+}
+
+.panel-intro {
+  margin-bottom: 30px;
+  color: #a6adc8;
+  font-size: 0.92rem;
+  line-height: 1.65;
+}
+
+.readiness-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  align-items: start;
+  padding: 17px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+}
+
+.readiness-card-checking {
+  background: rgb(249 226 175 / 8%);
+  border-color: rgb(249 226 175 / 25%);
+}
+
+.readiness-card-ready {
+  background: rgb(166 227 161 / 8%);
+  border-color: rgb(166 227 161 / 27%);
+}
+
+.readiness-card-degraded {
+  background: rgb(243 139 168 / 8%);
+  border-color: rgb(243 139 168 / 27%);
+}
+
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  background: #f9e2af;
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgb(249 226 175 / 10%);
+}
+
+.readiness-card-ready .status-indicator {
+  background: #a6e3a1;
+  box-shadow: 0 0 0 5px rgb(166 227 161 / 10%);
+}
+
+.readiness-card-degraded .status-indicator {
+  background: #f38ba8;
+  box-shadow: 0 0 0 5px rgb(243 139 168 / 10%);
+}
+
+.readiness-card p {
+  margin-bottom: 6px;
+  color: #f5e0dc;
+  font-size: 0.96rem;
+  font-weight: 750;
+}
+
+.readiness-card span {
+  color: #bac2de;
+  font-size: 0.79rem;
+  line-height: 1.55;
+}
+
+.status-metadata {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 22px 0;
+  margin: 25px 0;
+  border-top: 1px solid rgb(205 214 244 / 11%);
+  border-bottom: 1px solid rgb(205 214 244 / 11%);
+}
+
+.status-metadata div {
+  min-width: 0;
+}
+
+.status-metadata dt {
+  margin-bottom: 6px;
+  color: #6c7086;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.57rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.status-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #cdd6f4;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem;
+}
+
+.refresh-button {
+  width: 100%;
+  padding: 13px 16px;
+  color: #11111b;
+  background: #cba6f7;
+  border: 1px solid #cba6f7;
+  border-radius: 10px;
+  font-size: 0.86rem;
+  font-weight: 800;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    transform 150ms ease;
+}
+
+.refresh-button:hover {
+  background: #f5e0dc;
+  border-color: #f5e0dc;
+  transform: translateY(-1px);
+}
+
+.refresh-button:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    padding: 26px 24px 38px;
+  }
+
+  .control-room {
+    grid-template-columns: 1fr;
+    gap: 50px;
+    align-items: start;
+    min-height: auto;
+    padding: 66px 0 30px;
+  }
+
+  .introduction {
+    max-width: none;
+  }
+
+  .status-panel {
+    max-width: 530px;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    align-items: flex-start;
+    gap: 16px;
+    flex-direction: column;
+    padding-bottom: 24px;
+  }
+
+  .control-room {
+    padding-top: 48px;
+  }
+
+  h1 {
+    font-size: clamp(3.4rem, 17vw, 4.6rem);
+  }
+
+  .custody-rail {
+    padding: 18px 16px 21px;
+    border-radius: 14px;
+  }
+
+  .custody-rail::after {
+    right: 26px;
+    left: 26px;
+  }
+
+  .custody-rail ol {
+    gap: 7px;
+  }
+
+  .custody-rail strong {
+    font-size: 0.69rem;
+  }
+
+  .custody-rail small {
+    font-size: 0.54rem;
+  }
+
+  .status-panel {
+    padding: 25px;
+    border-radius: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skip-link,
+  .refresh-button {
+    transition: none;
+  }
+}
