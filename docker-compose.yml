@@ -42,6 +42,34 @@ services:
       retries: 20
       start_period: 5s
 
+  ministack:
+    image: ministackorg/ministack:1.4.1
+    environment:
+      AWS_ACCESS_KEY_ID: "000000000000"
+      AWS_SECRET_ACCESS_KEY: test
+      MINISTACK_HOST: ministack
+      MINISTACK_REGION: us-east-1
+      MINISTACK_WORKER_THREADS: "8"
+      PERSIST_STATE: "1"
+      SERVICES: ses,secretsmanager,kms
+      STATE_DIR: /tmp/ministack-state
+    ports:
+      - "4566:4566"
+    volumes:
+      - ministack_data:/tmp/ministack-state
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:4566/_ministack/ready', timeout=2).status == 200",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
   api:
     build:
       context: .
@@ -53,6 +81,12 @@ services:
       RABBITMQ_URL: amqp://escrow:escrow-local-only@rabbitmq:5672/%2F
       REDIS_URL: redis://redis:6379/0
       HEALTHCHECK_TIMEOUT_SECONDS: "1"
+      EMAIL_DELIVERY_BACKEND: ministack
+      MINISTACK_ENDPOINT_URL: http://ministack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: "000000000000"
+      AWS_SECRET_ACCESS_KEY: test
+      SES_FROM_EMAIL: no-reply@escrow.local
     ports:
       - "8000:8000"
     depends_on:
@@ -61,6 +95,8 @@ services:
       rabbitmq:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      ministack:
         condition: service_healthy
     healthcheck:
       test:
@@ -101,3 +137,4 @@ services:
 volumes:
   postgres_data:
   rabbitmq_data:
+  ministack_data:

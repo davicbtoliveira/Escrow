@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars for local use. This file contains only fake values.
+aws_access_key = "000000000000"
+aws_secret_key = "test"
+
+application_secret_values = {
+  DJANGO_SECRET_KEY      = "local-development-only-change-me"
+  WEBHOOK_SIGNING_SECRET = "local-webhook-secret-change-me"
+}

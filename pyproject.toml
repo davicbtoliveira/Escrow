@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A realistic B2B2C escrow custody simulation."
 requires-python = ">=3.13,<3.14"
 dependencies = [
+  "boto3>=1.35,<2",
   "Django>=5.2,<5.3",
   "djangorestframework>=3.16,<3.17",
   "daphne>=4.2,<5",
@@ -43,7 +44,7 @@ files = ["src"]
 mypy_path = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["pika.*"]
+module = ["boto3.*", "botocore.*", "pika.*"]
 ignore_missing_imports = true
 
 [tool.django-stubs]

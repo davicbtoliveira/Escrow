@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { type AccessRoute, AccessScreen } from "./features/access/AccessScreen";
+import { OrganizationDashboard } from "./features/organizations/OrganizationDashboard";
 import "./styles.css";
 
 type ReadinessState = "checking" | "ready" | "degraded";
+type AppRoute = "/" | "/dashboard" | AccessRoute;
 
 type ReadinessCopy = {
   detail: string;
@@ -32,7 +35,64 @@ function hasReadyStatus(payload: unknown): payload is { status: "ready" } {
   );
 }
 
+function routeFromPath(pathname: string): AppRoute {
+  const normalizedPath = pathname === "/" ? pathname : pathname.replace(/\/+$/, "");
+  if (
+    normalizedPath === "/login" ||
+    normalizedPath === "/recuperar" ||
+    normalizedPath === "/redefinir-senha" ||
+    normalizedPath === "/registro" ||
+    normalizedPath === "/dashboard"
+  ) {
+    return normalizedPath;
+  }
+
+  return "/";
+}
+
 export default function App() {
+  const [route, setRoute] = useState<AppRoute>(() => routeFromPath(window.location.pathname));
+
+  useEffect(() => {
+    const handleHistoryNavigation = () => setRoute(routeFromPath(window.location.pathname));
+    window.addEventListener("popstate", handleHistoryNavigation);
+
+    return () => window.removeEventListener("popstate", handleHistoryNavigation);
+  }, []);
+
+  const navigate = useCallback((nextRoute: AppRoute) => {
+    window.history.pushState({}, "", nextRoute);
+    setRoute(nextRoute);
+  }, []);
+
+  if (route === "/dashboard") {
+    return (
+      <OrganizationDashboard
+        onLogout={() => navigate("/login")}
+        onReturnToLogin={() => navigate("/login")}
+      />
+    );
+  }
+
+  if (
+    route === "/registro" ||
+    route === "/login" ||
+    route === "/recuperar" ||
+    route === "/redefinir-senha"
+  ) {
+    return (
+      <AccessScreen
+        mode={route}
+        onAuthenticated={() => navigate("/dashboard")}
+        onNavigate={navigate}
+      />
+    );
+  }
+
+  return <ReadinessLanding onNavigate={navigate} />;
+}
+
+function ReadinessLanding({ onNavigate }: { onNavigate: (route: AppRoute) => void }) {
   const [readiness, setReadiness] = useState<ReadinessState>("checking");
 
   const checkReadiness = useCallback(async () => {
@@ -75,7 +135,12 @@ export default function App() {
           </span>
           <span>ESCROW</span>
         </div>
-        <p className="environment-label">AMBIENTE LOCAL · SIMULAÇÃO</p>
+        <div className="topbar-actions">
+          <p className="environment-label">AMBIENTE LOCAL · SIMULAÇÃO</p>
+          <button type="button" className="topbar-login" onClick={() => onNavigate("/login")}>
+            Entrar
+          </button>
+        </div>
       </header>
 
       <section className="control-room" aria-labelledby="shell-title">

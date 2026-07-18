@@ -10,3 +10,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 coverage/
+
+# Terraform local state can contain simulated application secrets.
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/crash.log
+terraform/*.tfvars
+!terraform/terraform.tfvars.example
