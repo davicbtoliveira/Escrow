@@ -80,15 +80,25 @@ def release_funds(self: Any, body: object) -> bool:
     routing_key=LEDGER_REFUND_QUEUE.name,
 )
 def refund_funds(self: Any, body: object) -> bool:
-    """Return rejected pending-risk funding through PIX clearing exactly once."""
-    result = consume_envelope_task(
-        self,
-        body,
-        expected_type="ReturnRejectedFunding.v1",
-        expected_version=1,
-        consumer=LEDGER_REFUND_QUEUE.name,
-        effect=_return_rejected_funding,
-    )
+    """Return custody or rejected funding through PIX clearing exactly once."""
+    if _envelope_message_type(body) == "RefundFunds.v1":
+        result = consume_envelope_task(
+            self,
+            body,
+            expected_type="RefundFunds.v1",
+            expected_version=1,
+            consumer=LEDGER_REFUND_QUEUE.name,
+            effect=_refund_expired_custody,
+        )
+    else:
+        result = consume_envelope_task(
+            self,
+            body,
+            expected_type="ReturnRejectedFunding.v1",
+            expected_version=1,
+            consumer=LEDGER_REFUND_QUEUE.name,
+            effect=_return_rejected_funding,
+        )
     return result.processed
 
 
@@ -186,6 +196,60 @@ def _release_funds(envelope: MessageEnvelope) -> None:
         agreement=agreement,
         correlation_id=envelope.correlation_id,
         payload={"release_transfer_id": str(transfer.id)},
+    )
+
+
+def _refund_expired_custody(envelope: MessageEnvelope) -> None:
+    transfer, agreement = _refund_transfer_from(envelope)
+    if transfer.status == Transfer.Status.COMPLETED:
+        if agreement.status != EscrowAgreement.Status.REFUNDED:
+            raise PermanentMessageError("completed refund agreement is not refunded")
+        return
+    if (
+        transfer.status != Transfer.Status.PENDING
+        or agreement.status != EscrowAgreement.Status.REFUND_PENDING
+    ):
+        raise PermanentMessageError("refund transfer is not ready for posting")
+    try:
+        post_ledger_transaction(
+            LedgerPosting(
+                transfer_id=transfer.id,
+                kind=LedgerTransaction.Kind.FUNDS_REFUNDED,
+                currency=transfer.currency,
+                idempotency_key=f"funds-refunded:{transfer.id}",
+                entries=(
+                    LedgerEntryInput.debit(
+                        "ESCROW_LIABILITY",
+                        transfer.amount_minor,
+                        transfer.currency,
+                    ),
+                    LedgerEntryInput.credit(
+                        "PIX_CLEARING",
+                        transfer.amount_minor,
+                        transfer.currency,
+                    ),
+                ),
+            )
+        )
+    except LedgerPostingValidationError as error:
+        raise PermanentMessageError("refund ledger posting is invalid") from error
+    agreement.status = EscrowAgreement.Status.REFUNDED
+    agreement.version += 1
+    agreement.realtime_sequence += 1
+    agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+    transfer.status = Transfer.Status.COMPLETED
+    transfer.save(update_fields=["status", "updated_at"])
+    enqueue_agreement_status_changed(
+        agreement,
+        correlation_id=envelope.correlation_id,
+        causation_id=str(envelope.message_id),
+    )
+    record_audit_event(
+        event_type="funds_refunded",
+        organization=agreement.organization,
+        agreement=agreement,
+        correlation_id=envelope.correlation_id,
+        payload={"refund_transfer_id": str(transfer.id)},
     )
 
 
@@ -295,6 +359,33 @@ def _release_transfer_from(envelope: MessageEnvelope) -> tuple[Transfer, EscrowA
     return transfer, agreement
 
 
+def _refund_transfer_from(envelope: MessageEnvelope) -> tuple[Transfer, EscrowAgreement]:
+    payload = envelope.payload
+    if set(payload) != {"agreement_id", "transfer_id"}:
+        raise PermanentMessageError("refund payload is invalid")
+    agreement_id = _uuid_payload_value(payload, "agreement_id")
+    transfer_id = _uuid_payload_value(payload, "transfer_id")
+    try:
+        transfer = Transfer.objects.select_for_update().get(id=transfer_id)
+        agreement = (
+            EscrowAgreement.objects.select_for_update()
+            .select_related("organization")
+            .get(id=agreement_id)
+        )
+    except (EscrowAgreement.DoesNotExist, Transfer.DoesNotExist) as error:
+        raise PermanentMessageError("refund prerequisite is unknown") from error
+    if (
+        transfer.kind != Transfer.Kind.REFUND
+        or transfer.agreement_id != agreement.id
+        or transfer.provider != Transfer.Provider.INTERNAL
+        or transfer.amount_minor != agreement.amount_minor
+        or transfer.currency != agreement.currency
+        or str(agreement.organization_id) != envelope.tenant_id
+    ):
+        raise PermanentMessageError("refund message is outside its tenant or intent")
+    return transfer, agreement
+
+
 def _rejected_funding_transfer_from(envelope: MessageEnvelope) -> Transfer:
     payload = envelope.payload
     if set(payload) != {"agreement_id", "transfer_id"}:
@@ -324,6 +415,13 @@ def _rejected_funding_transfer_from(envelope: MessageEnvelope) -> Transfer:
     ):
         raise PermanentMessageError("funding return message is outside its tenant or policy")
     return transfer
+
+
+def _envelope_message_type(body: object) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    message_type = body.get("type")
+    return message_type if isinstance(message_type, str) else None
 
 
 def _uuid_payload_value(payload: dict[str, object], key: str) -> uuid.UUID:

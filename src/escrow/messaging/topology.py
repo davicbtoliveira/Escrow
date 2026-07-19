@@ -79,6 +79,10 @@ CELERY_TASK_ROUTES["escrow.integrations.enqueue_due_webhook_deliveries"] = {
     "queue": OUTBOX_PUBLISHER_QUEUE.name,
     "routing_key": OUTBOX_PUBLISHER_QUEUE.name,
 }
+CELERY_TASK_ROUTES["escrow.delivery.enqueue_expired_delivery_refunds"] = {
+    "queue": OUTBOX_PUBLISHER_QUEUE.name,
+    "routing_key": OUTBOX_PUBLISHER_QUEUE.name,
+}
 
 
 def exchange_for_routing_key(routing_key: str) -> Exchange:

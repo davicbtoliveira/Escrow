@@ -210,6 +210,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "escrow.integrations.enqueue_due_webhook_deliveries",
         "schedule": 1.0,
     },
+    "enqueue-expired-delivery-refunds": {
+        "task": "escrow.delivery.enqueue_expired_delivery_refunds",
+        "schedule": 60.0,
+    },
 }
 
 CHANNEL_LAYERS = {

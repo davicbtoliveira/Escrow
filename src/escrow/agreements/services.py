@@ -32,6 +32,7 @@ from escrow.agreements.pii import (
 from escrow.organizations.models import Organization
 
 AGREEMENT_CREATE_ROUTE = "/api/v1/agreements/"
+DELIVERY_DEADLINE_REFUND_REASON = "DELIVERY_DEADLINE_EXPIRED"
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 
 
@@ -237,6 +238,16 @@ def find_checkout_agreement(checkout_token: str) -> EscrowAgreement | None:
     )
 
 
+def refund_reason_for(agreement: EscrowAgreement) -> str | None:
+    """Explain the only automatic refund path the MVP can produce."""
+    if agreement.status in {
+        EscrowAgreement.Status.REFUND_PENDING,
+        EscrowAgreement.Status.REFUNDED,
+    }:
+        return DELIVERY_DEADLINE_REFUND_REASON
+    return None
+
+
 def agreement_payload(agreement: EscrowAgreement) -> dict[str, object]:
     """Normal API representation: financial terms plus masked customer identity."""
     return {
@@ -254,6 +265,7 @@ def agreement_payload(agreement: EscrowAgreement) -> dict[str, object]:
         "delivery_window_days": agreement.delivery_window_days,
         "delivery_due_at": _isoformat(agreement.delivery_due_at),
         "inspection_deadline_at": _isoformat(agreement.inspection_deadline_at),
+        "refund_reason": refund_reason_for(agreement),
         "realtime_sequence": agreement.realtime_sequence,
     }
 

@@ -60,6 +60,7 @@ class AgreementTermsSerializer(serializers.Serializer[Any]):
     delivery_window_days = serializers.IntegerField()
     delivery_due_at = serializers.DateTimeField(allow_null=True)
     inspection_deadline_at = serializers.DateTimeField(allow_null=True)
+    refund_reason = serializers.CharField(allow_null=True)
     realtime_sequence = serializers.IntegerField(min_value=0)
 
 

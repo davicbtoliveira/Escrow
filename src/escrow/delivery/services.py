@@ -24,7 +24,7 @@ from escrow.delivery.emails import CustomerOtpDeliveryError, send_customer_accep
 from escrow.delivery.models import CustomerOtpChallenge, DeliveryReport
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.outbox import enqueue_outbox_event
-from escrow.messaging.topology import LEDGER_RELEASE_QUEUE
+from escrow.messaging.topology import LEDGER_REFUND_QUEUE, LEDGER_RELEASE_QUEUE
 from escrow.notifications.outbox import enqueue_agreement_status_changed
 from escrow.payments.models import Transfer
 
@@ -32,6 +32,7 @@ INSPECTION_WINDOW_DAYS = 7
 OTP_MAX_VERIFICATION_ATTEMPTS = 5
 _OTP_CODE = re.compile(r"^[0-9]{6}$")
 _RELEASE_NAMESPACE = uuid.UUID("4d118b4b-35d6-42e8-9d66-cc3fac582c72")
+_REFUND_NAMESPACE = uuid.UUID("7f2c9b41-8e5a-4c3d-9a1b-0e6d5f4c2b18")
 
 
 class DeliveryAgreementNotFound(LookupError):
@@ -148,6 +149,80 @@ def report_delivery(
             payload={"delivery_report_id": str(report.id)},
         )
         return DeliveryReportResult(agreement=agreement, report=report, replayed=False)
+
+
+def enqueue_expired_delivery_refunds(*, now: datetime | None = None, limit: int = 100) -> int:
+    """Enqueue one refund command per held agreement past its delivery deadline."""
+    if type(limit) is not int or not 1 <= limit <= 1_000:
+        raise ValueError("expired delivery refund scan limit is invalid")
+    scanned_at = _reported_at(now)
+    candidates = (
+        EscrowAgreement.objects.filter(
+            status=EscrowAgreement.Status.HELD,
+            delivery_due_at__lte=scanned_at,
+        )
+        .order_by("delivery_due_at", "id")
+        .values_list("id", flat=True)[:limit]
+    )
+    enqueued = 0
+    for agreement_id in candidates:
+        enqueued += _enqueue_expired_delivery_refund(agreement_id, scanned_at)
+    return enqueued
+
+
+def _enqueue_expired_delivery_refund(agreement_id: UUID, scanned_at: datetime) -> int:
+    with transaction.atomic():
+        agreement = (
+            EscrowAgreement.objects.select_for_update()
+            .select_related("organization")
+            .get(id=agreement_id)
+        )
+        if (
+            agreement.status != EscrowAgreement.Status.HELD
+            or agreement.delivery_due_at is None
+            or agreement.delivery_due_at > scanned_at
+        ):
+            return 0
+        transfer = Transfer.objects.create(
+            agreement=agreement,
+            kind=Transfer.Kind.REFUND,
+            amount_minor=agreement.amount_minor,
+            currency=agreement.currency,
+            provider=Transfer.Provider.INTERNAL,
+            provider_reference=f"delivery-expired-refund-{agreement.id.hex}",
+            idempotency_key=f"delivery-expired-refund:{agreement.id}",
+        )
+        agreement.status = EscrowAgreement.Status.REFUND_PENDING
+        agreement.version += 1
+        agreement.realtime_sequence += 1
+        agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+        correlation_id = f"delivery-expired-refund:{agreement.id}"
+        enqueue_outbox_event(
+            MessageEnvelope.build(
+                message_id=uuid.uuid5(_REFUND_NAMESPACE, str(transfer.id)),
+                message_type="RefundFunds.v1",
+                version=1,
+                occurred_at=scanned_at,
+                correlation_id=correlation_id,
+                causation_id=str(agreement.id),
+                tenant_id=str(agreement.organization_id),
+                payload={"agreement_id": str(agreement.id), "transfer_id": str(transfer.id)},
+            ),
+            routing_key=LEDGER_REFUND_QUEUE.name,
+        )
+        enqueue_agreement_status_changed(
+            agreement,
+            correlation_id=correlation_id,
+            causation_id=str(transfer.id),
+        )
+        record_audit_event(
+            event_type="delivery_expired_refund_enqueued",
+            organization=agreement.organization,
+            agreement=agreement,
+            correlation_id=correlation_id,
+            payload={"refund_transfer_id": str(transfer.id)},
+        )
+        return 1
 
 
 def _reported_at(now: datetime | None) -> datetime:

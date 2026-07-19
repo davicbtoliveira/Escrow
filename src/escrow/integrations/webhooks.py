@@ -23,6 +23,7 @@ from django.utils import timezone
 
 from escrow.agreements.models import EscrowAgreement
 from escrow.agreements.pii import EncryptedValue, envelope_cipher
+from escrow.agreements.services import refund_reason_for
 from escrow.audit.services import record_audit_event
 from escrow.integrations.models import WebhookDelivery, WebhookEndpoint, WebhookEvent
 from escrow.integrations.rate_limit import check_outgoing_webhook_rate_limit
@@ -176,6 +177,7 @@ def enqueue_agreement_webhook_event(
         "agreement_id": str(agreement.id),
         "sequence": agreement.realtime_sequence,
         "status": agreement.status,
+        "refund_reason": refund_reason_for(agreement),
         "timestamp": _isoformat(event_time),
         "correlation_id": correlation_id,
         "causation_id": causation_id,

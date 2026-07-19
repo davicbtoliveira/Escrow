@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.test import SimpleTestCase
 
 from escrow.celery import app
+from escrow.delivery.tasks import enqueue_expired_delivery_refunds_task
 from escrow.messaging.tasks import publish_outbox_batch
 from escrow.messaging.topology import OUTBOX_PUBLISHER_QUEUE
 
@@ -31,3 +32,19 @@ class CeleryConfigurationTests(SimpleTestCase):
         assert task.queue == OUTBOX_PUBLISHER_QUEUE.name
         assert task.routing_key == OUTBOX_PUBLISHER_QUEUE.name
         assert publish_outbox_batch.name == task.name
+
+    def test_expired_delivery_refund_scan_is_a_routed_beat_task(self) -> None:
+        from django.conf import settings
+
+        task_name = "escrow.delivery.enqueue_expired_delivery_refunds"
+        task = app.tasks[task_name]
+
+        assert task.name == task_name
+        assert enqueue_expired_delivery_refunds_task.name == task_name
+        schedule = settings.CELERY_BEAT_SCHEDULE["enqueue-expired-delivery-refunds"]
+        assert schedule["task"] == task_name
+        assert schedule["schedule"] > 0
+        router = app.conf.task_routes[0]
+        route = router(task_name, (), {}, {})
+        assert route["queue"] == OUTBOX_PUBLISHER_QUEUE.name
+        assert route["routing_key"] == OUTBOX_PUBLISHER_QUEUE.name
