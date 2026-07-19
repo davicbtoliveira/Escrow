@@ -297,6 +297,9 @@ function isPublicCheckout(value: unknown): value is PublicCheckout {
     (agreement.inspection_deadline_at === undefined ||
       agreement.inspection_deadline_at === null ||
       typeof agreement.inspection_deadline_at === "string") &&
+    (agreement.refund_reason === undefined ||
+      agreement.refund_reason === null ||
+      typeof agreement.refund_reason === "string") &&
     typeof agreement.fee_bps === "number" &&
     typeof customer.name === "string" &&
     typeof customer.email_masked === "string" &&

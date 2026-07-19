@@ -198,6 +198,7 @@ export interface components {
             delivery_due_at: string | null;
             /** Format: date-time */
             inspection_deadline_at: string | null;
+            refund_reason: string | null;
             realtime_sequence: number;
             external_customer_id: string;
         };
@@ -285,6 +286,7 @@ export interface components {
             delivery_due_at: string | null;
             /** Format: date-time */
             inspection_deadline_at: string | null;
+            refund_reason: string | null;
             realtime_sequence: number;
         };
         PublicCheckoutResponse: {

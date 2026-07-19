@@ -222,6 +222,43 @@ describe("checkout público", () => {
     expect(screen.getByText("3. Custódia")).toHaveClass("is-current");
   });
 
+  it("explica o reembolso automático quando o prazo de entrega expira", async () => {
+    installFetchMock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            agreement: {
+              id: "agr-refunded",
+              status: "REFUNDED",
+              customer: {
+                name: "Marina Silva",
+                email_masked: "ma••••@exemplo.com",
+                document_masked: "***.456.789-**",
+              },
+              amount: "50000.00",
+              currency: "BRL",
+              delivery_window_days: 7,
+              delivery_due_at: "2026-07-18T12:00:00Z",
+              refund_reason: "DELIVERY_DEADLINE_EXPIRED",
+              fee_bps: 200,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    window.history.pushState({}, "", "/checkout/acordo-reembolsado");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Valor reembolsado")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/organização não entregou dentro do prazo combinado/i),
+    ).toBeInTheDocument();
+  });
+
   it("exige e verifica OTP antes de o cliente confirmar a entrega", async () => {
     const requestLog: Array<{ body: string | undefined; url: string }> = [];
     installFetchMock((input, init) => {

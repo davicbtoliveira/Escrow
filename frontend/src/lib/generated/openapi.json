@@ -510,6 +510,10 @@
                         "format": "date-time",
                         "nullable": true
                     },
+                    "refund_reason": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "realtime_sequence": {
                         "type": "integer",
                         "minimum": 0
@@ -529,6 +533,7 @@
                     "id",
                     "inspection_deadline_at",
                     "realtime_sequence",
+                    "refund_reason",
                     "status"
                 ]
             },
@@ -787,6 +792,10 @@
                         "format": "date-time",
                         "nullable": true
                     },
+                    "refund_reason": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "realtime_sequence": {
                         "type": "integer",
                         "minimum": 0
@@ -802,6 +811,7 @@
                     "id",
                     "inspection_deadline_at",
                     "realtime_sequence",
+                    "refund_reason",
                     "status"
                 ]
             },

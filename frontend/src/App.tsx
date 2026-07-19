@@ -195,6 +195,11 @@ function ReadinessLanding({ onNavigate }: { onNavigate: (route: NavigableRoute) 
                 <strong>Liberação</strong>
                 <small>autorizada</small>
               </li>
+              <li>
+                <span className="rail-node" aria-hidden="true" />
+                <strong>Reembolso</strong>
+                <small>se o prazo de entrega expirar</small>
+              </li>
             </ol>
           </section>
         </div>

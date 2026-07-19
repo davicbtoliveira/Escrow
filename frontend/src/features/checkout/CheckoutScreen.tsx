@@ -82,6 +82,17 @@ const checkoutStatus: Record<string, CheckoutStatus> = {
     detail: "Sua confirmação foi recebida e o valor está sendo liberado para a organização.",
     tone: "review",
   },
+  REFUND_PENDING: {
+    label: "Reembolso em processamento",
+    detail: "A organização não entregou dentro do prazo combinado. O valor está sendo devolvido.",
+    tone: "review",
+  },
+  REFUNDED: {
+    label: "Valor reembolsado",
+    detail:
+      "A organização não entregou dentro do prazo combinado. O valor protegido foi devolvido.",
+    tone: "rejected",
+  },
   FUNDING_REJECTED: {
     label: "Pagamento não aprovado",
     detail: "O valor não foi colocado em custódia. Solicite uma nova orientação à organização.",
@@ -101,7 +112,12 @@ const unknownStatus: CheckoutStatus = {
 };
 
 function checkoutStep(status: string): number {
-  if (status === "RELEASED" || status === "RELEASE_PENDING") {
+  if (
+    status === "RELEASED" ||
+    status === "RELEASE_PENDING" ||
+    status === "REFUNDED" ||
+    status === "REFUND_PENDING"
+  ) {
     return 3;
   }
   if (status === "HELD_IN_ESCROW" || status === "HELD" || status === "INSPECTION") {
@@ -221,6 +237,7 @@ function isProcessingStatus(status: string): boolean {
     "PENDING_RISK_REVIEW",
     "REVIEW_REQUIRED",
     "RELEASE_PENDING",
+    "REFUND_PENDING",
   ].includes(status);
 }
 
