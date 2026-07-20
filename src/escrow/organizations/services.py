@@ -5,11 +5,24 @@ from __future__ import annotations
 import uuid
 
 from escrow.identity.models import User
-from escrow.organizations.models import OrganizationMember
+from escrow.organizations.models import ExchangeRate, OrganizationMember
 
 
 class MembershipNotFoundError(LookupError):
     """The session user has no active organization workspace."""
+
+
+def latest_simulated_rate(base_currency: str, quote_currency: str) -> ExchangeRate | None:
+    """Return the newest simulated display rate for one currency pair, if any."""
+    return (
+        ExchangeRate.objects.filter(
+            base_currency=base_currency,
+            quote_currency=quote_currency,
+            is_simulated=True,
+        )
+        .order_by("-recorded_at", "-created_at", "id")
+        .first()
+    )
 
 
 def current_membership_for(user: User) -> OrganizationMember:

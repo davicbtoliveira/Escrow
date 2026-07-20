@@ -20,6 +20,31 @@ class Organization(models.Model):
         ordering = ["name", "id"]
 
 
+class ExchangeRate(models.Model):
+    """Timestamped simulated rate used only for approximate dashboard display."""
+
+    class Currency(models.TextChoices):
+        BRL = "BRL", "Brazilian real"
+        USD = "USD", "United States dollar"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    base_currency = models.CharField(max_length=3, choices=Currency.choices)
+    quote_currency = models.CharField(max_length=3, choices=Currency.choices)
+    rate_micros = models.PositiveBigIntegerField()
+    is_simulated = models.BooleanField(default=True)
+    recorded_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-recorded_at", "-created_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(base_currency=models.F("quote_currency")),
+                name="organizations_exchange_rate_distinct_currencies",
+            ),
+        ]
+
+
 class OrganizationMember(models.Model):
     class Role(models.TextChoices):
         OWNER = "OWNER", "Owner"
