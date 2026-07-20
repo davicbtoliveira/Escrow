@@ -25,6 +25,8 @@ auditability, and reproducible local infrastructure.
 - Accountless hosted checkout and simulated PIX charges with signed, duplicate-safe callbacks.
 - Versioned, deterministic funding-risk decisions: approval, manual review, or rejection.
 - Append-only, double-entry postings for received, held, released, rejected, and refunded funds.
+- Per-currency held, available, and fee balances with scheduled releases and a display-only,
+  simulated BRL/USD approximate toggle that never mutates financial state.
 - Delivery reporting, a seven-day inspection window, OTP-authorized customer acceptance,
   deadline-based refunds, and inspection-expiry releases.
 - Transactional outbox, explicit RabbitMQ topology, idempotent consumers, dead-letter storage and
