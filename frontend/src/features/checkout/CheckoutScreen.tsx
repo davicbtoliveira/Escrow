@@ -111,6 +111,30 @@ const unknownStatus: CheckoutStatus = {
   tone: "pending",
 };
 
+const automaticReleaseStatus: Record<string, CheckoutStatus> = {
+  RELEASE_PENDING: {
+    label: "Liberação em processamento",
+    detail:
+      "A janela de inspeção terminou sem disputa. O valor está sendo liberado para a organização.",
+    tone: "review",
+  },
+  RELEASED: {
+    label: "Valor liberado",
+    detail: "A janela de inspeção terminou sem disputa. O valor foi liberado para a organização.",
+    tone: "released",
+  },
+};
+
+function checkoutStatusFor(agreement: PublicCheckout["agreement"]): CheckoutStatus {
+  if (agreement.release_reason === "INSPECTION_WINDOW_EXPIRED") {
+    const automatic = automaticReleaseStatus[agreement.status];
+    if (automatic) {
+      return automatic;
+    }
+  }
+  return checkoutStatus[agreement.status] ?? unknownStatus;
+}
+
 function checkoutStep(status: string): number {
   if (
     status === "RELEASED" ||
@@ -527,7 +551,7 @@ export function CheckoutScreen({ token }: CheckoutScreenProps) {
 
   const { checkout } = state;
   const { agreement: readyAgreement } = checkout;
-  const status = checkoutStatus[readyAgreement.status] ?? unknownStatus;
+  const status = checkoutStatusFor(readyAgreement);
   const currentStep = checkoutStep(readyAgreement.status);
   const payment = paymentFor(checkout);
   const copyPaste = payment?.pix_copy_paste ?? pix?.copy_paste;

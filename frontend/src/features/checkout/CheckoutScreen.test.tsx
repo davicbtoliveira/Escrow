@@ -259,6 +259,78 @@ describe("checkout público", () => {
     ).toBeInTheDocument();
   });
 
+  it("explica a liberação automática quando a janela de inspeção expira", async () => {
+    installFetchMock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            agreement: {
+              id: "agr-released-auto",
+              status: "RELEASED",
+              customer: {
+                name: "Marina Silva",
+                email_masked: "ma••••@exemplo.com",
+                document_masked: "***.456.789-**",
+              },
+              amount: "50000.00",
+              currency: "BRL",
+              delivery_window_days: 7,
+              delivery_due_at: "2026-07-11T12:00:00Z",
+              inspection_deadline_at: "2026-07-18T12:00:00Z",
+              release_reason: "INSPECTION_WINDOW_EXPIRED",
+              fee_bps: 200,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    window.history.pushState({}, "", "/checkout/acordo-liberado-automatico");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Valor liberado")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/janela de inspeção terminou sem disputa/i)).toBeInTheDocument();
+  });
+
+  it("mantém a confirmação do cliente como origem da liberação", async () => {
+    installFetchMock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            agreement: {
+              id: "agr-released-manual",
+              status: "RELEASED",
+              customer: {
+                name: "Marina Silva",
+                email_masked: "ma••••@exemplo.com",
+                document_masked: "***.456.789-**",
+              },
+              amount: "50000.00",
+              currency: "BRL",
+              delivery_window_days: 7,
+              delivery_due_at: "2026-07-11T12:00:00Z",
+              inspection_deadline_at: "2026-07-25T12:00:00Z",
+              release_reason: "CUSTOMER_ACCEPTANCE",
+              fee_bps: 200,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    window.history.pushState({}, "", "/checkout/acordo-liberado-aceite");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Valor liberado")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/entrega foi confirmada e o valor foi liberado/i)).toBeInTheDocument();
+  });
+
   it("exige e verifica OTP antes de o cliente confirmar a entrega", async () => {
     const requestLog: Array<{ body: string | undefined; url: string }> = [];
     installFetchMock((input, init) => {

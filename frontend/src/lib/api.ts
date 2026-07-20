@@ -300,6 +300,9 @@ function isPublicCheckout(value: unknown): value is PublicCheckout {
     (agreement.refund_reason === undefined ||
       agreement.refund_reason === null ||
       typeof agreement.refund_reason === "string") &&
+    (agreement.release_reason === undefined ||
+      agreement.release_reason === null ||
+      typeof agreement.release_reason === "string") &&
     typeof agreement.fee_bps === "number" &&
     typeof customer.name === "string" &&
     typeof customer.email_masked === "string" &&

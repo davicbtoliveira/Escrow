@@ -199,6 +199,7 @@ export interface components {
             /** Format: date-time */
             inspection_deadline_at: string | null;
             refund_reason: string | null;
+            release_reason: string | null;
             realtime_sequence: number;
             external_customer_id: string;
         };
@@ -287,6 +288,7 @@ export interface components {
             /** Format: date-time */
             inspection_deadline_at: string | null;
             refund_reason: string | null;
+            release_reason: string | null;
             realtime_sequence: number;
         };
         PublicCheckoutResponse: {

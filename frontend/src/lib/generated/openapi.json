@@ -514,6 +514,10 @@
                         "type": "string",
                         "nullable": true
                     },
+                    "release_reason": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "realtime_sequence": {
                         "type": "integer",
                         "minimum": 0
@@ -534,6 +538,7 @@
                     "inspection_deadline_at",
                     "realtime_sequence",
                     "refund_reason",
+                    "release_reason",
                     "status"
                 ]
             },
@@ -796,6 +801,10 @@
                         "type": "string",
                         "nullable": true
                     },
+                    "release_reason": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "realtime_sequence": {
                         "type": "integer",
                         "minimum": 0
@@ -812,6 +821,7 @@
                     "inspection_deadline_at",
                     "realtime_sequence",
                     "refund_reason",
+                    "release_reason",
                     "status"
                 ]
             },
