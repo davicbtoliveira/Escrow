@@ -170,6 +170,80 @@ def enqueue_expired_delivery_refunds(*, now: datetime | None = None, limit: int 
     return enqueued
 
 
+def enqueue_expired_inspection_releases(*, now: datetime | None = None, limit: int = 100) -> int:
+    """Enqueue one release command per inspection past its seven-day window."""
+    if type(limit) is not int or not 1 <= limit <= 1_000:
+        raise ValueError("expired inspection release scan limit is invalid")
+    scanned_at = _reported_at(now)
+    candidates = (
+        EscrowAgreement.objects.filter(
+            status=EscrowAgreement.Status.INSPECTION,
+            inspection_deadline_at__lte=scanned_at,
+        )
+        .order_by("inspection_deadline_at", "id")
+        .values_list("id", flat=True)[:limit]
+    )
+    enqueued = 0
+    for agreement_id in candidates:
+        enqueued += _enqueue_expired_inspection_release(agreement_id, scanned_at)
+    return enqueued
+
+
+def _enqueue_expired_inspection_release(agreement_id: UUID, scanned_at: datetime) -> int:
+    with transaction.atomic():
+        agreement = (
+            EscrowAgreement.objects.select_for_update()
+            .select_related("organization")
+            .get(id=agreement_id)
+        )
+        if (
+            agreement.status != EscrowAgreement.Status.INSPECTION
+            or agreement.inspection_deadline_at is None
+            or agreement.inspection_deadline_at > scanned_at
+        ):
+            return 0
+        transfer = Transfer.objects.create(
+            agreement=agreement,
+            kind=Transfer.Kind.RELEASE,
+            amount_minor=agreement.amount_minor,
+            currency=agreement.currency,
+            provider=Transfer.Provider.INTERNAL,
+            provider_reference=f"inspection-expired-release-{agreement.id.hex}",
+            idempotency_key=f"inspection-expired-release:{agreement.id}",
+        )
+        agreement.status = EscrowAgreement.Status.RELEASE_PENDING
+        agreement.version += 1
+        agreement.realtime_sequence += 1
+        agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+        correlation_id = f"inspection-expired-release:{agreement.id}"
+        enqueue_outbox_event(
+            MessageEnvelope.build(
+                message_id=uuid.uuid5(_RELEASE_NAMESPACE, str(transfer.id)),
+                message_type="ReleaseFunds.v1",
+                version=1,
+                occurred_at=scanned_at,
+                correlation_id=correlation_id,
+                causation_id=str(agreement.id),
+                tenant_id=str(agreement.organization_id),
+                payload={"agreement_id": str(agreement.id), "transfer_id": str(transfer.id)},
+            ),
+            routing_key=LEDGER_RELEASE_QUEUE.name,
+        )
+        enqueue_agreement_status_changed(
+            agreement,
+            correlation_id=correlation_id,
+            causation_id=str(transfer.id),
+        )
+        record_audit_event(
+            event_type="inspection_expired_release_enqueued",
+            organization=agreement.organization,
+            agreement=agreement,
+            correlation_id=correlation_id,
+            payload={"release_transfer_id": str(transfer.id)},
+        )
+        return 1
+
+
 def _enqueue_expired_delivery_refund(agreement_id: UUID, scanned_at: datetime) -> int:
     with transaction.atomic():
         agreement = (

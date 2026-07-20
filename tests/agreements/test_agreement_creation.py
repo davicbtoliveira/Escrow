@@ -338,6 +338,7 @@ class AgreementCreationApiTests(TestCase):
             "inspection_deadline_at",
             "fee_bps",
             "refund_reason",
+            "release_reason",
             "realtime_sequence",
         }
         assert agreement["customer"] == {

@@ -214,6 +214,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "escrow.delivery.enqueue_expired_delivery_refunds",
         "schedule": 60.0,
     },
+    "enqueue-expired-inspection-releases": {
+        "task": "escrow.delivery.enqueue_expired_inspection_releases",
+        "schedule": 60.0,
+    },
 }
 
 CHANNEL_LAYERS = {

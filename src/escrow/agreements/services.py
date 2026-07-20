@@ -33,6 +33,9 @@ from escrow.organizations.models import Organization
 
 AGREEMENT_CREATE_ROUTE = "/api/v1/agreements/"
 DELIVERY_DEADLINE_REFUND_REASON = "DELIVERY_DEADLINE_EXPIRED"
+CUSTOMER_ACCEPTANCE_RELEASE_REASON = "CUSTOMER_ACCEPTANCE"
+INSPECTION_EXPIRED_RELEASE_REASON = "INSPECTION_WINDOW_EXPIRED"
+INSPECTION_EXPIRED_RELEASE_REFERENCE_PREFIX = "inspection-expired-release-"
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
 
 
@@ -248,6 +251,27 @@ def refund_reason_for(agreement: EscrowAgreement) -> str | None:
     return None
 
 
+def release_reason_for(agreement: EscrowAgreement) -> str | None:
+    """Distinguish the automatic window expiry from explicit customer acceptance."""
+    if agreement.status not in {
+        EscrowAgreement.Status.RELEASE_PENDING,
+        EscrowAgreement.Status.RELEASED,
+    }:
+        return None
+    from escrow.payments.models import Transfer
+
+    provider_reference = (
+        Transfer.objects.filter(agreement=agreement, kind=Transfer.Kind.RELEASE)
+        .values_list("provider_reference", flat=True)
+        .first()
+    )
+    if isinstance(provider_reference, str) and provider_reference.startswith(
+        INSPECTION_EXPIRED_RELEASE_REFERENCE_PREFIX
+    ):
+        return INSPECTION_EXPIRED_RELEASE_REASON
+    return CUSTOMER_ACCEPTANCE_RELEASE_REASON
+
+
 def agreement_payload(agreement: EscrowAgreement) -> dict[str, object]:
     """Normal API representation: financial terms plus masked customer identity."""
     return {
@@ -266,6 +290,7 @@ def agreement_payload(agreement: EscrowAgreement) -> dict[str, object]:
         "delivery_due_at": _isoformat(agreement.delivery_due_at),
         "inspection_deadline_at": _isoformat(agreement.inspection_deadline_at),
         "refund_reason": refund_reason_for(agreement),
+        "release_reason": release_reason_for(agreement),
         "realtime_sequence": agreement.realtime_sequence,
     }
 
