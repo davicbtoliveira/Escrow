@@ -21,6 +21,7 @@ from escrow.organizations.models import OrganizationMember
 from escrow.organizations.services import (
     MembershipNotFoundError,
     current_membership_for,
+    latest_simulated_rate,
     membership_for_current_organization,
 )
 
@@ -64,29 +65,52 @@ def current_organization(request: HttpRequest) -> HttpResponse:
             "membership": {"id": str(membership.id), "role": membership.role},
             "balances": balances,
             "upcoming_releases": upcoming_releases,
+            "exchange_rates": _display_exchange_rates(),
         }
     )
+
+
+def _display_exchange_rates() -> list[dict[str, object]]:
+    """Serve only simulated display rates; authoritative balances stay untouched."""
+    rates: list[dict[str, object]] = []
+    for base_currency, quote_currency in (("BRL", "USD"), ("USD", "BRL")):
+        rate = latest_simulated_rate(base_currency, quote_currency)
+        if rate is None:
+            continue
+        rates.append(
+            {
+                "base_currency": rate.base_currency,
+                "quote_currency": rate.quote_currency,
+                "rate_micros": rate.rate_micros,
+                "recorded_at": rate.recorded_at.isoformat().replace("+00:00", "Z"),
+                "is_simulated": rate.is_simulated,
+            }
+        )
+    return rates
 
 
 def _financial_overview(
     membership: OrganizationMember,
 ) -> tuple[dict[str, int], list[dict[str, object]]]:
     organization = membership.organization
-    balances = {
-        "held_brl_minor": _account_balance_minor(organization.id, "ESCROW_LIABILITY", "BRL"),
-        "available_brl_minor": _account_balance_minor(
-            organization.id,
-            "ORGANIZATION_PAYABLE",
-            "BRL",
-        ),
-    }
+    balances: dict[str, int] = {}
+    for currency in ("BRL", "USD"):
+        lowered = currency.lower()
+        balances[f"held_{lowered}_minor"] = _account_balance_minor(
+            organization.id, "ESCROW_LIABILITY", currency
+        )
+        balances[f"available_{lowered}_minor"] = _account_balance_minor(
+            organization.id, "ORGANIZATION_PAYABLE", currency
+        )
+        balances[f"fee_{lowered}_minor"] = _account_balance_minor(
+            organization.id, "PLATFORM_FEE_REVENUE", currency
+        )
     upcoming_releases: list[dict[str, object]] = []
     agreements = (
         EscrowAgreement.objects.filter(
             organization=organization,
             status=EscrowAgreement.Status.INSPECTION,
             inspection_deadline_at__isnull=False,
-            currency="BRL",
         )
         .order_by("inspection_deadline_at", "id")
         .only("id", "amount_minor", "currency", "fee_bps", "inspection_deadline_at")

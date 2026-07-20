@@ -181,7 +181,11 @@ class DeliveryToReleaseEndToEndTests(TestCase):
         assert dashboard.status_code == 200
         assert dashboard.json()["balances"] == {
             "held_brl_minor": 0,
+            "held_usd_minor": 0,
             "available_brl_minor": 49_000,
+            "available_usd_minor": 0,
+            "fee_brl_minor": 1_000,
+            "fee_usd_minor": 0,
         }
         assert dashboard.json()["upcoming_releases"] == []
 

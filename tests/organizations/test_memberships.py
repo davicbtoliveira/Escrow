@@ -48,7 +48,14 @@ class OrganizationMembershipApiTests(TestCase):
         assert response.status_code == 200
         assert response.json()["organization"]["name"] == "Alpha Comércio"
         assert response.json()["membership"]["role"] == "OWNER"
-        assert response.json()["balances"] == {"held_brl_minor": 0, "available_brl_minor": 0}
+        assert response.json()["balances"] == {
+            "held_brl_minor": 0,
+            "held_usd_minor": 0,
+            "available_brl_minor": 0,
+            "available_usd_minor": 0,
+            "fee_brl_minor": 0,
+            "fee_usd_minor": 0,
+        }
 
     def test_non_owner_cannot_manage_members(self) -> None:
         self.client.force_login(self.finance_user)
