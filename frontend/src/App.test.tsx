@@ -28,8 +28,28 @@ function organizationDashboardResponse() {
       membership: { role: "OWNER" },
       balances: {
         held_brl_minor: 5000000,
+        held_usd_minor: 0,
         available_brl_minor: 245000,
+        available_usd_minor: 0,
+        fee_brl_minor: 0,
+        fee_usd_minor: 0,
       },
+      exchange_rates: [
+        {
+          base_currency: "BRL",
+          quote_currency: "USD",
+          rate_micros: 180000,
+          recorded_at: "2026-01-01T00:00:00Z",
+          is_simulated: true,
+        },
+        {
+          base_currency: "USD",
+          quote_currency: "BRL",
+          rate_micros: 5400000,
+          recorded_at: "2026-01-01T00:00:00Z",
+          is_simulated: true,
+        },
+      ],
       upcoming_releases: [
         {
           id: "agr_01",
@@ -212,6 +232,70 @@ describe("acesso da organização", () => {
         "Esta senha aparece em vazamentos conhecidos. Escolha outra.",
       );
     });
+  });
+
+  it("alterna a conversão aproximada sem alterar os saldos autoritativos", async () => {
+    const fetchMock = installFetchMock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            organization: { name: "Loja Dólar", document_masked: null },
+            membership: { role: "FINANCE" },
+            balances: {
+              held_brl_minor: 5000000,
+              held_usd_minor: 735000,
+              available_brl_minor: 0,
+              available_usd_minor: 0,
+              fee_brl_minor: 0,
+              fee_usd_minor: 15000,
+            },
+            upcoming_releases: [],
+            exchange_rates: [
+              {
+                base_currency: "BRL",
+                quote_currency: "USD",
+                rate_micros: 180000,
+                recorded_at: "2026-01-01T00:00:00Z",
+                is_simulated: true,
+              },
+              {
+                base_currency: "USD",
+                quote_currency: "BRL",
+                rate_micros: 5400000,
+                recorded_at: "2026-01-01T00:00:00Z",
+                is_simulated: true,
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    window.history.pushState({}, "", "/dashboard");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Loja Dólar" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: /conversão simulada/i });
+    fireEvent.click(toggle);
+
+    expect(screen.getAllByText(/7\.350,00/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/9\.000,00/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/39\.690,00/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/≈/).length).toBeGreaterThan(0);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(toggle);
+
+    expect(screen.queryByText(/≈/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/7\.350,00/)).not.toHaveLength(0);
+    expect(
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("organizations/current")),
+    ).toHaveLength(1);
   });
 
   it("permite que um membro entre com uma sessão protegida", async () => {

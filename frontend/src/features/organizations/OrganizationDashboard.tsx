@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ApiError, type CurrentOrganization, organizationApi } from "../../lib/api";
 import { ApiKeyPanel } from "../integrations/ApiKeyPanel";
 import { WebhookPanel } from "../integrations/WebhookPanel";
+import { approximateAmount, type Currency, type DisplayExchangeRate, formatMoney } from "./money";
 
 type OrganizationDashboardProps = {
   onLogout: () => void;
@@ -13,30 +14,12 @@ type LoadState =
   | { status: "ready"; organization: CurrentOrganization }
   | { status: "error"; message: string };
 
-function displayMoney(amountMinor: number): string {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amountMinor / 100);
-}
-
 function displayDate(value: string): string {
   return new Intl.DateTimeFormat("pt-BR", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "UTC",
   }).format(new Date(value));
-}
-
-function displayReleaseMoney(amountMinor: number, currency: "BRL"): string {
-  return new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amountMinor / 100);
 }
 
 function dashboardError(error: unknown): string {
@@ -54,6 +37,7 @@ function dashboardError(error: unknown): string {
 export function OrganizationDashboard({ onLogout, onReturnToLogin }: OrganizationDashboardProps) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showApproximate, setShowApproximate] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -114,6 +98,7 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
 
   const {
     balances,
+    exchange_rates: exchangeRates,
     membership,
     organization,
     upcoming_releases: upcomingReleases,
@@ -164,12 +149,53 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
         </aside>
       </section>
 
-      <section className="balance-ledger" aria-label="Saldos da organização em BRL">
-        <BalanceBand label="Em custódia" tone="held" amountMinor={balances.held_brl_minor} />
+      <div className="balance-toolbar">
+        <button
+          type="button"
+          className="balance-toggle"
+          aria-pressed={showApproximate}
+          onClick={() => setShowApproximate((current) => !current)}
+        >
+          {showApproximate ? "Ocultar conversão simulada" : "Exibir conversão simulada"}
+        </button>
+        {showApproximate ? (
+          <p className="balance-toggle-note">
+            Valores aproximados com taxa simulada. A conversão nunca altera acordos, lançamentos ou
+            saldos.
+          </p>
+        ) : null}
+      </div>
+
+      <section className="balance-ledger" aria-label="Saldos da organização por moeda">
+        <BalanceBand
+          label="Em custódia"
+          tone="held"
+          amounts={[
+            { currency: "BRL", amountMinor: balances.held_brl_minor },
+            { currency: "USD", amountMinor: balances.held_usd_minor },
+          ]}
+          exchangeRates={exchangeRates}
+          showApproximate={showApproximate}
+        />
         <BalanceBand
           label="Disponível"
           tone="available"
-          amountMinor={balances.available_brl_minor}
+          amounts={[
+            { currency: "BRL", amountMinor: balances.available_brl_minor },
+            { currency: "USD", amountMinor: balances.available_usd_minor },
+          ]}
+          exchangeRates={exchangeRates}
+          showApproximate={showApproximate}
+        />
+        <BalanceBand
+          label="Taxas da plataforma"
+          tone="fees"
+          amounts={[
+            { currency: "BRL", amountMinor: balances.fee_brl_minor },
+            { currency: "USD", amountMinor: balances.fee_usd_minor },
+          ]}
+          exchangeRates={exchangeRates}
+          showApproximate={showApproximate}
         />
       </section>
 
@@ -191,12 +217,12 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
                   <strong>{release.id}</strong>
                   <span>Disponível em {displayDate(release.release_at)}</span>
                   <span>
-                    Bruto {displayReleaseMoney(release.gross_minor, release.currency)} · Taxa{" "}
-                    {displayReleaseMoney(release.fee_minor, release.currency)} · Líquido{" "}
-                    {displayReleaseMoney(release.net_minor, release.currency)}
+                    Bruto {formatMoney(release.gross_minor, release.currency)} · Taxa{" "}
+                    {formatMoney(release.fee_minor, release.currency)} · Líquido{" "}
+                    {formatMoney(release.net_minor, release.currency)}
                   </span>
                 </div>
-                <output>{displayReleaseMoney(release.net_minor, release.currency)}</output>
+                <output>{formatMoney(release.net_minor, release.currency)}</output>
               </li>
             ))}
           </ol>
@@ -216,13 +242,17 @@ export function OrganizationDashboard({ onLogout, onReturnToLogin }: Organizatio
 }
 
 function BalanceBand({
-  amountMinor,
+  amounts,
+  exchangeRates,
   label,
+  showApproximate,
   tone,
 }: {
-  amountMinor: number;
+  amounts: { currency: Currency; amountMinor: number }[];
+  exchangeRates: DisplayExchangeRate[];
   label: string;
-  tone: "available" | "held";
+  showApproximate: boolean;
+  tone: "available" | "fees" | "held";
 }) {
   return (
     <section className={`balance-band balance-band-${tone}`} aria-label={label}>
@@ -231,14 +261,30 @@ function BalanceBand({
         <span>
           {tone === "held"
             ? "Valores protegidos até a liberação"
-            : "Valores já liberados para a organização"}
+            : tone === "available"
+              ? "Valores já liberados para a organização"
+              : "Taxas já descontadas das liberações"}
         </span>
       </div>
       <dl>
-        <div>
-          <dt>BRL</dt>
-          <dd>{displayMoney(amountMinor)}</dd>
-        </div>
+        {amounts.map(({ currency, amountMinor }) => {
+          const approximate = showApproximate
+            ? approximateAmount(amountMinor, currency, exchangeRates)
+            : null;
+          return (
+            <div key={currency}>
+              <dt>{currency}</dt>
+              <dd>
+                {formatMoney(amountMinor, currency)}
+                {approximate ? (
+                  <span className="balance-approx">
+                    ≈ {formatMoney(approximate.amountMinor, approximate.currency)}
+                  </span>
+                ) : null}
+              </dd>
+            </div>
+          );
+        })}
       </dl>
     </section>
   );

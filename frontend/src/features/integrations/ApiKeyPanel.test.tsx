@@ -41,8 +41,16 @@ function organizationDashboardResponse() {
     JSON.stringify({
       organization: { name: "Loja Horizonte", document_masked: "12.345.***/0001-**" },
       membership: { role: "OWNER" },
-      balances: { held_brl_minor: 5000000, available_brl_minor: 245000 },
+      balances: {
+        held_brl_minor: 5000000,
+        held_usd_minor: 0,
+        available_brl_minor: 245000,
+        available_usd_minor: 0,
+        fee_brl_minor: 0,
+        fee_usd_minor: 0,
+      },
       upcoming_releases: [],
+      exchange_rates: [],
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );

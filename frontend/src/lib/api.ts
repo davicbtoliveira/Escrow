@@ -5,8 +5,16 @@ export type ScheduledRelease = {
   gross_minor: number;
   fee_minor: number;
   net_minor: number;
-  currency: "BRL";
+  currency: "BRL" | "USD";
   release_at: string;
+};
+
+export type DisplayExchangeRate = {
+  base_currency: "BRL" | "USD";
+  quote_currency: "BRL" | "USD";
+  rate_micros: number;
+  recorded_at: string;
+  is_simulated: boolean;
 };
 
 export type CurrentOrganization = {
@@ -19,9 +27,14 @@ export type CurrentOrganization = {
   };
   balances: {
     held_brl_minor: number;
+    held_usd_minor: number;
     available_brl_minor: number;
+    available_usd_minor: number;
+    fee_brl_minor: number;
+    fee_usd_minor: number;
   };
   upcoming_releases: ScheduledRelease[];
+  exchange_rates: DisplayExchangeRate[];
 };
 
 export const apiKeyScopes = [

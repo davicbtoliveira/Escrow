@@ -794,9 +794,39 @@ h2 {
   line-height: 1.5;
 }
 
+.balance-toolbar {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 0;
+}
+
+.balance-toggle {
+  border: 1px solid rgb(205 214 244 / 28%);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: transparent;
+  color: #cdd6f4;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.balance-toggle[aria-pressed="true"] {
+  border-color: #89b4fa;
+  color: #89b4fa;
+}
+
+.balance-toggle-note {
+  margin: 0;
+  color: #a6adc8;
+  font-size: 0.72rem;
+}
+
 .balance-ledger {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   border-top: 1px solid rgb(205 214 244 / 18%);
   border-bottom: 1px solid rgb(205 214 244 / 18%);
 }
@@ -810,12 +840,12 @@ h2 {
   padding: 28px 0;
 }
 
-.balance-band:first-child {
+.balance-band:not(:last-child) {
   padding-right: clamp(22px, 4vw, 60px);
   border-right: 1px solid rgb(205 214 244 / 14%);
 }
 
-.balance-band:last-child {
+.balance-band:not(:first-child) {
   padding-left: clamp(22px, 4vw, 60px);
 }
 
@@ -854,6 +884,12 @@ h2 {
   font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 0.89rem;
   font-variant-numeric: tabular-nums;
+}
+
+.balance-approx {
+  display: block;
+  color: #a6adc8;
+  font-size: 0.72rem;
 }
 
 .balance-band-held dd {
