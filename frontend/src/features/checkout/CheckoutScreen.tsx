@@ -77,6 +77,12 @@ const checkoutStatus: Record<string, CheckoutStatus> = {
     detail: "Você tem uma janela de inspeção para confirmar a entrega ou abrir uma disputa.",
     tone: "held",
   },
+  DISPUTED: {
+    label: "Disputa em análise",
+    detail:
+      "Você abriu uma disputa. O valor permanece protegido até a decisão final da plataforma.",
+    tone: "review",
+  },
   RELEASE_PENDING: {
     label: "Liberação em processamento",
     detail: "Sua confirmação foi recebida e o valor está sendo liberado para a organização.",
@@ -144,7 +150,12 @@ function checkoutStep(status: string): number {
   ) {
     return 3;
   }
-  if (status === "HELD_IN_ESCROW" || status === "HELD" || status === "INSPECTION") {
+  if (
+    status === "HELD_IN_ESCROW" ||
+    status === "HELD" ||
+    status === "INSPECTION" ||
+    status === "DISPUTED"
+  ) {
     return 2;
   }
   if (

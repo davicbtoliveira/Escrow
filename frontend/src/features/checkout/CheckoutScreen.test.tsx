@@ -222,6 +222,41 @@ describe("checkout público", () => {
     expect(screen.getByText("3. Custódia")).toHaveClass("is-current");
   });
 
+  it("mostra o estado de disputa sem expor evidências ou dados internos", async () => {
+    installFetchMock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            agreement: {
+              id: "agr-disputed",
+              status: "DISPUTED",
+              customer: {
+                name: "Marina Silva",
+                email_masked: "ma••••@exemplo.com",
+                document_masked: "***.456.789-**",
+              },
+              amount: "50000.00",
+              currency: "BRL",
+              delivery_window_days: 7,
+              delivery_due_at: null,
+              fee_bps: 200,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    window.history.pushState({}, "", "/checkout/acordo-disputado");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Disputa em análise")).toBeInTheDocument();
+    });
+    expect(screen.getByText("3. Custódia")).toHaveClass("is-current");
+    expect(screen.queryByText(/evidência/i)).not.toBeInTheDocument();
+  });
+
   it("explica o reembolso automático quando o prazo de entrega expira", async () => {
     installFetchMock(() =>
       Promise.resolve(
