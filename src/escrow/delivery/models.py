@@ -28,13 +28,22 @@ class DeliveryReport(models.Model):
 
 
 class CustomerOtpChallenge(models.Model):
-    """A short-lived, hashed capability for one customer delivery acceptance."""
+    """A short-lived, hashed capability for one customer inspection action."""
+
+    class Purpose(models.TextChoices):
+        DELIVERY_ACCEPTANCE = "DELIVERY_ACCEPTANCE", "Delivery acceptance"
+        DISPUTE = "DISPUTE", "Dispute"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     agreement = models.ForeignKey(
         EscrowAgreement,
         on_delete=models.PROTECT,
         related_name="customer_otp_challenges",
+    )
+    purpose = models.CharField(
+        max_length=32,
+        choices=Purpose.choices,
+        default=Purpose.DELIVERY_ACCEPTANCE,
     )
     code_hash = models.CharField(max_length=64)
     sent_at = models.DateTimeField()

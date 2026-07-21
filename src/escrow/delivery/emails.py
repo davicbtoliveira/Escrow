@@ -14,9 +14,27 @@ class CustomerOtpDeliveryError(RuntimeError):
 
 def send_customer_acceptance_otp(email: str, code: str) -> None:
     """Deliver an OTP without logging or persisting its plaintext value."""
-    subject = "Confirme a entrega no Escrow"
+    _send_customer_otp(
+        email,
+        code,
+        subject="Confirme a entrega no Escrow",
+        action="confirmar a entrega no Escrow",
+    )
+
+
+def send_customer_dispute_otp(email: str, code: str) -> None:
+    """Deliver a dispute OTP without logging or persisting its plaintext value."""
+    _send_customer_otp(
+        email,
+        code,
+        subject="Abra uma disputa no Escrow",
+        action="abrir uma disputa no Escrow",
+    )
+
+
+def _send_customer_otp(email: str, code: str, *, subject: str, action: str) -> None:
     body = (
-        f"Use o código {code} para confirmar a entrega no Escrow. "
+        f"Use o código {code} para {action}. "
         "Ele expira em 10 minutos. Se você não solicitou esta ação, ignore este email."
     )
     if settings.EMAIL_DELIVERY_BACKEND == "django":

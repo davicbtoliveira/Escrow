@@ -20,7 +20,11 @@ from escrow.agreements.models import EscrowAgreement
 from escrow.agreements.pii import EncryptedValue, PiiEncryptionUnavailable, envelope_cipher
 from escrow.agreements.services import customer_pii_context, find_checkout_agreement
 from escrow.audit.services import record_audit_event
-from escrow.delivery.emails import CustomerOtpDeliveryError, send_customer_acceptance_otp
+from escrow.delivery.emails import (
+    CustomerOtpDeliveryError,
+    send_customer_acceptance_otp,
+    send_customer_dispute_otp,
+)
 from escrow.delivery.models import CustomerOtpChallenge, DeliveryReport
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.outbox import enqueue_outbox_event
@@ -311,9 +315,10 @@ def request_customer_acceptance_otp(
     *,
     checkout_token: str,
     correlation_id: str,
+    purpose: CustomerOtpChallenge.Purpose = CustomerOtpChallenge.Purpose.DELIVERY_ACCEPTANCE,
     now: datetime | None = None,
 ) -> CustomerOtpRequestResult:
-    """Issue and email a short-lived, hashed proof for delivery acceptance."""
+    """Issue and email a short-lived, hashed proof for one inspection action."""
     sent_at = _reported_at(now)
     with transaction.atomic():
         agreement = _locked_checkout_agreement(checkout_token)
@@ -321,6 +326,7 @@ def request_customer_acceptance_otp(
         code = _new_otp_code()
         challenge = CustomerOtpChallenge.objects.create(
             agreement=agreement,
+            purpose=purpose,
             code_hash=_otp_hash(uuid.uuid4(), code),
             sent_at=sent_at,
             expires_at=sent_at + timedelta(seconds=settings.CUSTOMER_OTP_TTL_SECONDS),
@@ -329,11 +335,11 @@ def request_customer_acceptance_otp(
         challenge.save(update_fields=["code_hash"])
         email = _decrypt_customer_email(agreement)
         try:
-            send_customer_acceptance_otp(email, code)
+            _send_action_otp(purpose, email, code)
         except CustomerOtpDeliveryError:
             raise
         record_audit_event(
-            event_type="customer_acceptance_otp_sent",
+            event_type=_otp_audit_event_type(purpose),
             organization=agreement.organization,
             agreement=agreement,
             correlation_id=correlation_id,
@@ -347,9 +353,10 @@ def verify_customer_acceptance_otp(
     checkout_token: str,
     challenge_id: UUID,
     code: str,
+    purpose: CustomerOtpChallenge.Purpose = CustomerOtpChallenge.Purpose.DELIVERY_ACCEPTANCE,
     now: datetime | None = None,
 ) -> CustomerOtpVerificationResult:
-    """Verify an emailed code and return a one-time acceptance capability."""
+    """Verify an emailed code and return a one-time capability for the same purpose."""
     verified_at = _reported_at(now)
     if _OTP_CODE.fullmatch(code) is None:
         raise CustomerOtpVerificationFailed
@@ -360,6 +367,7 @@ def verify_customer_acceptance_otp(
             challenge = CustomerOtpChallenge.objects.select_for_update().get(
                 id=challenge_id,
                 agreement=agreement,
+                purpose=purpose,
             )
         except CustomerOtpChallenge.DoesNotExist as error:
             raise CustomerOtpChallengeNotFound from error
@@ -376,10 +384,10 @@ def verify_customer_acceptance_otp(
             failed = True
             acceptance_token = ""
         else:
-            acceptance_token = _new_acceptance_token()
+            acceptance_token = _new_action_token(purpose)
             challenge.verification_attempts += 1
             challenge.verified_at = verified_at
-            challenge.authorization_token_hash = _acceptance_token_hash(acceptance_token)
+            challenge.authorization_token_hash = _action_token_hash(purpose, acceptance_token)
             challenge.authorization_expires_at = verified_at + timedelta(
                 seconds=settings.CUSTOMER_OTP_TTL_SECONDS
             )
@@ -394,6 +402,29 @@ def verify_customer_acceptance_otp(
     if failed:
         raise CustomerOtpVerificationFailed
     return CustomerOtpVerificationResult(challenge=challenge, acceptance_token=acceptance_token)
+
+
+def authorize_customer_inspection_action(
+    *,
+    checkout_token: str,
+    challenge_id: UUID,
+    action_token: str,
+    purpose: CustomerOtpChallenge.Purpose,
+    now: datetime | None = None,
+) -> tuple[EscrowAgreement, CustomerOtpChallenge]:
+    """Lock the checkout agreement and prove one emailed capability for another module."""
+    authorized_at = _reported_at(now)
+    agreement = _locked_checkout_agreement(checkout_token)
+    try:
+        challenge = CustomerOtpChallenge.objects.select_for_update().get(
+            id=challenge_id,
+            agreement=agreement,
+            purpose=purpose,
+        )
+    except CustomerOtpChallenge.DoesNotExist as error:
+        raise CustomerOtpChallengeNotFound from error
+    _require_acceptance_authorization(challenge, action_token, purpose, authorized_at)
+    return agreement, challenge
 
 
 def accept_customer_delivery(
@@ -412,10 +443,16 @@ def accept_customer_delivery(
             challenge = CustomerOtpChallenge.objects.select_for_update().get(
                 id=challenge_id,
                 agreement=agreement,
+                purpose=CustomerOtpChallenge.Purpose.DELIVERY_ACCEPTANCE,
             )
         except CustomerOtpChallenge.DoesNotExist as error:
             raise CustomerOtpChallengeNotFound from error
-        _require_acceptance_authorization(challenge, acceptance_token, accepted_at)
+        _require_acceptance_authorization(
+            challenge,
+            acceptance_token,
+            CustomerOtpChallenge.Purpose.DELIVERY_ACCEPTANCE,
+            accepted_at,
+        )
         existing = Transfer.objects.select_for_update().filter(
             agreement=agreement,
             kind=Transfer.Kind.RELEASE,
@@ -533,30 +570,52 @@ def _new_otp_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def _new_acceptance_token() -> str:
-    return f"otp_accept_{secrets.token_urlsafe(32)}"
+def _new_action_token(purpose: CustomerOtpChallenge.Purpose) -> str:
+    prefix = {
+        CustomerOtpChallenge.Purpose.DELIVERY_ACCEPTANCE: "otp_accept",
+        CustomerOtpChallenge.Purpose.DISPUTE: "otp_dispute",
+    }[purpose]
+    return f"{prefix}_{secrets.token_urlsafe(32)}"
 
 
-def _acceptance_token_hash(token: str) -> str:
+def _action_token_hash(purpose: CustomerOtpChallenge.Purpose, token: str) -> str:
     if not settings.CUSTOMER_OTP_HMAC_SECRET:
         raise PiiEncryptionUnavailable("customer OTP secret is not configured")
     return hmac.new(
         settings.CUSTOMER_OTP_HMAC_SECRET.encode(),
-        f"customer-acceptance-token:v1:{token}".encode(),
+        f"customer-action-token:v1:{purpose}:{token}".encode(),
         hashlib.sha256,
     ).hexdigest()
+
+
+def _send_action_otp(
+    purpose: CustomerOtpChallenge.Purpose,
+    email: str,
+    code: str,
+) -> None:
+    if purpose == CustomerOtpChallenge.Purpose.DISPUTE:
+        send_customer_dispute_otp(email, code)
+        return
+    send_customer_acceptance_otp(email, code)
+
+
+def _otp_audit_event_type(purpose: CustomerOtpChallenge.Purpose) -> str:
+    if purpose == CustomerOtpChallenge.Purpose.DISPUTE:
+        return "customer_dispute_otp_sent"
+    return "customer_acceptance_otp_sent"
 
 
 def _require_acceptance_authorization(
     challenge: CustomerOtpChallenge,
     acceptance_token: str,
+    purpose: CustomerOtpChallenge.Purpose,
     now: datetime,
 ) -> None:
     token_hash = challenge.authorization_token_hash
     if (
         not isinstance(acceptance_token, str)
         or token_hash is None
-        or not hmac.compare_digest(token_hash, _acceptance_token_hash(acceptance_token))
+        or not hmac.compare_digest(token_hash, _action_token_hash(purpose, acceptance_token))
         or challenge.authorization_expires_at is None
     ):
         raise CustomerAcceptanceAuthorizationInvalid
