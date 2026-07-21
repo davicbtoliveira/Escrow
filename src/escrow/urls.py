@@ -7,6 +7,7 @@ from drf_spectacular.views import SpectacularJSONAPIView
 
 from escrow.agreements import views as agreement_views
 from escrow.delivery import views as delivery_views
+from escrow.disputes import views as dispute_views
 from escrow.health import liveness, readiness
 from escrow.payments import views as payment_views
 
@@ -42,6 +43,16 @@ urlpatterns = [
         "api/v1/checkout/<str:checkout_token>/delivery-acceptance/",
         delivery_views.accept_customer_reported_delivery,
         name="customer-delivery-acceptance",
+    ),
+    path(
+        "api/v1/checkout/<str:checkout_token>/disputes/otp/",
+        dispute_views.request_customer_dispute_otp,
+        name="customer-dispute-otp-request",
+    ),
+    path(
+        "api/v1/checkout/<str:checkout_token>/disputes/otp/<uuid:challenge_id>/verify/",
+        dispute_views.verify_customer_dispute_otp,
+        name="customer-dispute-otp-verify",
     ),
     path(
         "api/v1/checkout/<str:checkout_token>/",
