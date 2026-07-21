@@ -34,9 +34,8 @@ auditability, and reproducible local infrastructure.
 - Correlation IDs, structured JSON logs, health probes, and immutable audit events.
 - React UI in pt-BR for access, organization operations, integrations, and public checkout.
 
-Dispute state transitions, SLA modeling, and evidence validation exist at the domain/service layer.
-Public dispute/evidence endpoints and Ceph-backed private object storage are not wired into the
-current Compose stack yet.
+- OTP-authorized customer disputes that freeze the inspection window, validated private evidence
+  uploads to Ceph RGW, and audited, time-limited evidence access grants for platform staff.
 
 ## Custody lifecycle
 
@@ -82,6 +81,7 @@ flowchart TB
     API --> PostgreSQL[(PostgreSQL<br/>authoritative state + outbox)]
     API --> Redis[(Redis<br/>channels + rate limits)]
     API --> MiniStack[MiniStack<br/>KMS + SES + Secrets Manager]
+    API --> Ceph[Ceph RGW<br/>private evidence objects]
     Terraform[Terraform bootstrap] --> MiniStack
 
     PostgreSQL --> Outbox[Outbox publisher]
@@ -129,9 +129,10 @@ immutability triggers prevent duplicate or historical mutation effects.
 ### Requirements
 
 - Docker Engine with Docker Compose v2.
-- Ports `5173`, `8000`, `4566`, and `15672` available.
-- Enough Docker resources for PostgreSQL, RabbitMQ, Redis, MiniStack, Terraform, the API, five
-  Celery processes, and the frontend. No measured minimum or Compose resource limit is defined yet.
+- Ports `5173`, `8000`, `4566`, `8080`, and `15672` available.
+- Enough Docker resources for PostgreSQL, RabbitMQ, Redis, MiniStack, Ceph, Terraform, the API,
+  five Celery processes, and the frontend. The single-node Ceph demo is the heaviest service; no
+  measured minimum or Compose resource limit is defined yet.
 
 Host Python, Bun, and Terraform are not required for the full Compose path.
 
@@ -150,6 +151,7 @@ initializes MiniStack resources before the API becomes healthy.
 | OpenAPI JSON | <http://localhost:8000/api/v1/openapi.json> |
 | RabbitMQ management | <http://localhost:15672> (`escrow` / `escrow-local-only`) |
 | MiniStack | <http://localhost:4566> |
+| Ceph RGW (S3 API) | <http://localhost:8080> (private evidence bucket `escrow-evidence`) |
 
 Follow core application logs:
 
@@ -289,6 +291,7 @@ groups are:
 | API capabilities | `API_KEY_HMAC_SECRET`, `CHECKOUT_TOKEN_HMAC_SECRET`, `AGREEMENT_IDEMPOTENCY_HMAC_SECRET` |
 | Local email and AWS APIs | `EMAIL_DELIVERY_BACKEND`, `MINISTACK_ENDPOINT_URL`, `AWS_REGION`, `SES_FROM_EMAIL` |
 | Sandbox PIX | `SANDBOX_PIX_ENABLED`, `SANDBOX_PIX_CALLBACK_SIGNING_SECRET` |
+| Private evidence storage | `EVIDENCE_S3_ENDPOINT_URL`, `EVIDENCE_S3_BUCKET`, `EVIDENCE_S3_ACCESS_KEY_ID`, `EVIDENCE_S3_SECRET_ACCESS_KEY`, `EVIDENCE_ACCESS_GRANT_TTL_SECONDS`, `EVIDENCE_DOWNLOAD_URL_TTL_SECONDS` |
 
 Defaults and the complete configuration contract live in `src/escrow/settings.py`; Compose-specific
 values live in `docker-compose.yml`.
@@ -320,7 +323,7 @@ This mapping is architectural direction, not a completed or validated production
 | PostgreSQL | RDS for PostgreSQL | PostgreSQL remains authoritative |
 | Redis | ElastiCache for Redis | Must remain non-authoritative for financial state |
 | MiniStack KMS/SES/Secrets Manager | AWS KMS/SES/Secrets Manager | Emulator behavior does not prove AWS parity or security |
-| Intended Ceph RGW evidence store | Amazon S3 | Ceph is not present in the current Compose stack |
+| Ceph RGW evidence store | Amazon S3 | Single-node demo Ceph; production would need managed, replicated object storage |
 | RabbitMQ | Amazon MQ for RabbitMQ | Moving to SQS/SNS is a redesign, not an endpoint swap |
 | Local Terraform state | Remote, locked state | Backend, IAM, credentials, and secret handling remain future work |
 
@@ -336,8 +339,12 @@ This mapping is architectural direction, not a completed or validated production
   encrypted, access-controlled, locked state.
 - The current stack has no TLS termination, production secret distribution, backup/restore plan,
   high availability, disaster recovery, or production observability deployment.
-- Private evidence object storage is deferred; do not treat evidence metadata models as a complete
-  secure upload/download path.
+- Private evidence validation is limited to size, filename, extension, and magic-byte MIME checks.
+  No antivirus scanning (for example ClamAV) is performed. This is an accepted limitation of the
+  controlled demo environment, where only fictional files are allowed; a real deployment must add
+  malware scanning before general availability.
+- The Ceph RGW container runs a single-node demo configuration without TLS, replication, or IAM
+  isolation; it proves the private S3-compatible flow, not production object storage.
 - Only fictional identities, documents, email addresses, and amounts may be used in demos or tests.
 
 ## Further documentation

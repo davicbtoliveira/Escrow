@@ -20,6 +20,11 @@ x-runtime-environment: &runtime-environment
   CHECKOUT_TOKEN_HMAC_SECRET: local-checkout-token-key-only
   AGREEMENT_IDEMPOTENCY_HMAC_SECRET: local-agreement-idempotency-hmac-key-only
   SANDBOX_PIX_CALLBACK_SIGNING_SECRET: local-sandbox-pix-callback-secret
+  EVIDENCE_S3_ENDPOINT_URL: http://ceph:8080
+  EVIDENCE_S3_REGION: us-east-1
+  EVIDENCE_S3_BUCKET: escrow-evidence
+  EVIDENCE_S3_ACCESS_KEY_ID: escrow-local-evidence
+  EVIDENCE_S3_SECRET_ACCESS_KEY: escrow-local-evidence-secret
 
 services:
   postgres:
@@ -91,6 +96,30 @@ services:
       retries: 20
       start_period: 10s
 
+  ceph:
+    image: quay.io/ceph/daemon:latest-reef
+    command: ["demo"]
+    environment:
+      MON_IP: 172.30.0.15
+      CEPH_PUBLIC_NETWORK: 172.30.0.0/24
+      CEPH_DEMO_UID: escrow-evidence
+      CEPH_DEMO_ACCESS_KEY: escrow-local-evidence
+      CEPH_DEMO_SECRET_KEY: escrow-local-evidence-secret
+      CEPH_DEMO_BUCKET: escrow-evidence
+    ports:
+      - "8080:8080"
+    volumes:
+      - ceph_data:/var/lib/ceph
+    networks:
+      default:
+        ipv4_address: 172.30.0.15
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://127.0.0.1:8080 > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
   terraform:
     image: hashicorp/terraform:1.12.2
     working_dir: /workspace
@@ -130,6 +159,8 @@ services:
         condition: service_healthy
       terraform:
         condition: service_completed_successfully
+      ceph:
+        condition: service_started
     healthcheck:
       test:
         [
@@ -220,3 +251,4 @@ volumes:
   postgres_data:
   rabbitmq_data:
   ministack_data:
+  ceph_data:
