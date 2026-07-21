@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -14,9 +17,11 @@ from escrow.audit.services import record_audit_event
 from escrow.delivery.models import CustomerOtpChallenge
 from escrow.delivery.services import authorize_customer_inspection_action
 from escrow.disputes.evidence import prepare_evidence_upload
-from escrow.disputes.models import Dispute, Evidence
-from escrow.disputes.storage import store_evidence_object
+from escrow.disputes.models import Dispute, Evidence, EvidenceAccessGrant
+from escrow.disputes.storage import presign_evidence_download, store_evidence_object
+from escrow.identity.models import User
 from escrow.notifications.outbox import enqueue_agreement_status_changed
+from escrow.risk.services import PLATFORM_ADMIN_GROUP, RISK_DISPUTE_ANALYST_GROUP
 
 DISPUTE_SLA = timedelta(hours=72)
 
@@ -31,6 +36,18 @@ class DisputeStateConflict(RuntimeError):
 
 class DisputeAlreadyOpen(RuntimeError):
     """An agreement can have only one customer dispute."""
+
+
+class EvidenceNotFound(LookupError):
+    """The requested evidence or access grant does not exist."""
+
+
+class EvidenceAccessForbidden(PermissionError):
+    """The caller lacks the platform-staff capability required for evidence access."""
+
+
+class EvidenceAccessExpired(RuntimeError):
+    """A time-limited evidence access grant is no longer valid."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +148,108 @@ def attach_customer_evidence(
             payload={"dispute_id": str(dispute.id), "evidence_id": str(evidence.id)},
         )
         return evidence
+
+
+def issue_evidence_access_grant(
+    *,
+    dispute_id: UUID,
+    evidence_id: UUID,
+    actor: User,
+    correlation_id: str,
+    now: datetime | None = None,
+) -> tuple[EvidenceAccessGrant, str]:
+    """Issue one hashed, short-lived download capability to authorized staff."""
+    issued_at = _timestamp(now)
+    _require_evidence_reader(actor)
+    with transaction.atomic():
+        try:
+            evidence = (
+                Evidence.objects.select_related("dispute__agreement__organization")
+                .get(id=evidence_id, dispute_id=dispute_id)
+            )
+        except Evidence.DoesNotExist as error:
+            raise EvidenceNotFound from error
+        access_token = _new_evidence_access_token()
+        grant = EvidenceAccessGrant.objects.create(
+            evidence=evidence,
+            actor=actor,
+            token_hash=_evidence_access_token_hash(access_token),
+            issued_at=issued_at,
+            expires_at=issued_at + timedelta(seconds=settings.EVIDENCE_ACCESS_GRANT_TTL_SECONDS),
+        )
+        record_audit_event(
+            event_type="evidence_access_granted",
+            organization=evidence.dispute.agreement.organization,
+            agreement=evidence.dispute.agreement,
+            actor=actor,
+            correlation_id=correlation_id,
+            payload={
+                "dispute_id": str(dispute_id),
+                "evidence_id": str(evidence.id),
+                "grant_id": str(grant.id),
+            },
+        )
+        return grant, access_token
+
+
+def download_evidence_with_grant(
+    *,
+    access_token: str,
+    s3_client: object,
+    correlation_id: str,
+    now: datetime | None = None,
+) -> tuple[str, EvidenceAccessGrant]:
+    """Audit one authorized access and return a short-lived pre-signed URL."""
+    accessed_at = _timestamp(now)
+    with transaction.atomic():
+        try:
+            grant = (
+                EvidenceAccessGrant.objects.select_for_update()
+                .select_related("evidence__dispute__agreement__organization", "actor")
+                .get(token_hash=_evidence_access_token_hash(access_token))
+            )
+        except EvidenceAccessGrant.DoesNotExist as error:
+            raise EvidenceNotFound from error
+        if grant.expires_at <= accessed_at:
+            raise EvidenceAccessExpired
+        download_url = presign_evidence_download(
+            s3_client,
+            object_key=grant.evidence.object_key,
+            ttl_seconds=settings.EVIDENCE_DOWNLOAD_URL_TTL_SECONDS,
+        )
+        grant.last_accessed_at = accessed_at
+        grant.save(update_fields=["last_accessed_at"])
+        record_audit_event(
+            event_type="evidence_accessed",
+            organization=grant.evidence.dispute.agreement.organization,
+            agreement=grant.evidence.dispute.agreement,
+            actor=grant.actor,
+            correlation_id=correlation_id,
+            payload={
+                "evidence_id": str(grant.evidence_id),
+                "grant_id": str(grant.id),
+                "sha256": grant.evidence.sha256,
+            },
+        )
+        return download_url, grant
+
+
+def _require_evidence_reader(actor: User) -> None:
+    """Allow only active risk-dispute analysts or platform admins, never organizations."""
+    if not actor.is_authenticated or not actor.is_active or not actor.is_staff:
+        raise EvidenceAccessForbidden
+    if not actor.groups.filter(
+        name__in=[RISK_DISPUTE_ANALYST_GROUP, PLATFORM_ADMIN_GROUP]
+    ).exists():
+        raise EvidenceAccessForbidden
+
+
+def _new_evidence_access_token() -> str:
+    return f"eva_{secrets.token_urlsafe(32)}"
+
+
+def _evidence_access_token_hash(token: str) -> str:
+    return hashlib.sha256(f"evidence-access:v1:{token}".encode()).hexdigest()
 
 
 def open_dispute_after_customer_authorization(
