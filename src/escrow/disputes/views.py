@@ -17,12 +17,18 @@ from escrow.correlation import get_correlation_id
 from escrow.delivery.emails import CustomerOtpDeliveryError
 from escrow.delivery.models import CustomerOtpChallenge
 from escrow.delivery.services import (
+    CustomerAcceptanceAuthorizationInvalid,
     CustomerOtpChallengeNotFound,
     CustomerOtpStateConflict,
     CustomerOtpVerificationFailed,
     DeliveryAgreementNotFound,
     request_customer_acceptance_otp,
     verify_customer_acceptance_otp,
+)
+from escrow.disputes.services import (
+    DisputeAlreadyOpen,
+    DisputeStateConflict,
+    open_customer_dispute,
 )
 from escrow.http import InvalidJsonBody, error_response, parse_json_body
 from escrow.integrations.rate_limit import (
@@ -42,6 +48,18 @@ class DisputeOtpVerificationSerializer(serializers.Serializer[object]):
 
 class DisputeOtpVerificationResponseSerializer(serializers.Serializer[object]):
     dispute_token = serializers.CharField()
+
+
+class CustomerDisputeOpenSerializer(serializers.Serializer[object]):
+    challenge_id = serializers.UUIDField()
+    dispute_token = serializers.CharField()
+
+
+class CustomerDisputeOpenResponseSerializer(serializers.Serializer[object]):
+    dispute_id = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=["OPEN"])
+    opened_at = serializers.DateTimeField()
+    sla_due_at = serializers.DateTimeField()
 
 
 @extend_schema(
@@ -143,6 +161,58 @@ def verify_customer_dispute_otp(
     except PiiEncryptionUnavailable:
         return _checkout_headers(error_response("customer_otp_unavailable", 503))
     return _checkout_headers(Response({"dispute_token": result.acceptance_token}))
+
+
+@extend_schema(
+    operation_id="openCustomerDispute",
+    auth=[],
+    request=CustomerDisputeOpenSerializer,
+    responses={201: CustomerDisputeOpenResponseSerializer},
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([])
+def open_customer_dispute_view(
+    request: HttpRequest,
+    checkout_token: str,
+) -> Response | HttpResponse:
+    """Freeze a live inspection with one dispute after a fresh email verification."""
+    try:
+        payload = parse_json_body(request)
+        if set(payload) != {"challenge_id", "dispute_token"}:
+            raise InvalidJsonBody
+        challenge_id = UUID(str(payload["challenge_id"]))
+        dispute_token = payload["dispute_token"]
+        if not isinstance(dispute_token, str):
+            raise InvalidJsonBody
+    except (InvalidJsonBody, ValueError):
+        return _checkout_headers(error_response("validation_error", 400))
+    try:
+        result = open_customer_dispute(
+            checkout_token=checkout_token,
+            challenge_id=challenge_id,
+            dispute_token=dispute_token,
+            correlation_id=get_correlation_id(),
+        )
+    except (DeliveryAgreementNotFound, CustomerOtpChallengeNotFound):
+        return _checkout_headers(error_response("not_found", 404))
+    except CustomerAcceptanceAuthorizationInvalid:
+        return _checkout_headers(error_response("customer_dispute_unauthorized", 403))
+    except (DisputeAlreadyOpen, DisputeStateConflict):
+        return _checkout_headers(error_response("dispute_conflict", 409))
+    except PiiEncryptionUnavailable:
+        return _checkout_headers(error_response("customer_dispute_unavailable", 503))
+    return _checkout_headers(
+        Response(
+            {
+                "dispute_id": str(result.dispute.id),
+                "status": result.dispute.status,
+                "opened_at": result.dispute.opened_at,
+                "sla_due_at": result.dispute.sla_due_at,
+            },
+            status=201,
+        )
+    )
 
 
 def _checkout_headers(response: HttpResponse) -> HttpResponse:

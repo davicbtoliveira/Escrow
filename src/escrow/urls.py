@@ -55,6 +55,11 @@ urlpatterns = [
         name="customer-dispute-otp-verify",
     ),
     path(
+        "api/v1/checkout/<str:checkout_token>/disputes/",
+        dispute_views.open_customer_dispute_view,
+        name="customer-dispute-open",
+    ),
+    path(
         "api/v1/checkout/<str:checkout_token>/",
         agreement_views.public_checkout,
         name="public-checkout",
