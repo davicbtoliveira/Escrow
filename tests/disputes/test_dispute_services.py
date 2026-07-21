@@ -12,6 +12,7 @@ from escrow.agreements.pii import CustomerIdentity, envelope_cipher
 from escrow.agreements.services import checkout_token_hash, customer_pii_context
 from escrow.audit.models import AuditEvent
 from escrow.delivery.services import (
+    CustomerOtpStateConflict,
     accept_customer_delivery,
     enqueue_expired_inspection_releases,
     request_customer_acceptance_otp,
@@ -185,3 +186,39 @@ class DisputeAfterAcceptanceRaceTests(TestCase):
         self.agreement.refresh_from_db()
         assert self.agreement.status == EscrowAgreement.Status.RELEASE_PENDING
         assert Dispute.objects.filter(agreement=self.agreement).count() == 0
+
+    @patch("escrow.delivery.services.send_customer_acceptance_otp")
+    @patch("escrow.delivery.services._new_otp_code", return_value="123456")
+    def test_a_customer_acceptance_after_a_dispute_conflicts(
+        self,
+        _: object,
+        send_email: object,
+    ) -> None:
+        requested = request_customer_acceptance_otp(
+            checkout_token=self.checkout_token,
+            correlation_id="race-otp-002",
+        )
+        verified = verify_customer_acceptance_otp(
+            checkout_token=self.checkout_token,
+            challenge_id=requested.challenge.id,
+            code="123456",
+        )
+        open_dispute_after_customer_authorization(
+            agreement_id=self.agreement.id,
+            correlation_id="race-dispute-002",
+        )
+
+        with self.assertRaises(CustomerOtpStateConflict):
+            accept_customer_delivery(
+                checkout_token=self.checkout_token,
+                challenge_id=requested.challenge.id,
+                acceptance_token=verified.acceptance_token,
+                correlation_id="race-accept-002",
+            )
+
+        self.agreement.refresh_from_db()
+        assert self.agreement.status == EscrowAgreement.Status.DISPUTED
+        assert Transfer.objects.filter(
+            agreement=self.agreement,
+            kind=Transfer.Kind.RELEASE,
+        ).count() == 0
