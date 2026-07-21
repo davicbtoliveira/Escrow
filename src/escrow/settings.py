@@ -198,6 +198,20 @@ SANDBOX_PIX_CALLBACK_SIGNING_SECRET = os.environ.get(
 )
 SANDBOX_PIX_ENABLED = os.environ.get("SANDBOX_PIX_ENABLED", str(DEBUG)).lower() == "true"
 
+EVIDENCE_S3_ENDPOINT_URL = os.environ.get("EVIDENCE_S3_ENDPOINT_URL", "http://localhost:8080")
+EVIDENCE_S3_REGION = os.environ.get("EVIDENCE_S3_REGION", "us-east-1")
+EVIDENCE_S3_BUCKET = os.environ.get("EVIDENCE_S3_BUCKET", "escrow-evidence")
+EVIDENCE_S3_ACCESS_KEY_ID = os.environ.get("EVIDENCE_S3_ACCESS_KEY_ID", "escrow-local-evidence")
+EVIDENCE_S3_SECRET_ACCESS_KEY = os.environ.get(
+    "EVIDENCE_S3_SECRET_ACCESS_KEY", "escrow-local-evidence-secret"
+)
+EVIDENCE_ACCESS_GRANT_TTL_SECONDS = max(
+    60, int(os.environ.get("EVIDENCE_ACCESS_GRANT_TTL_SECONDS", "900"))
+)
+EVIDENCE_DOWNLOAD_URL_TTL_SECONDS = max(
+    60, int(os.environ.get("EVIDENCE_DOWNLOAD_URL_TTL_SECONDS", "300"))
+)
+
 CELERY_BROKER_URL = RABBITMQ_URL
 CELERY_RESULT_BACKEND = None
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True

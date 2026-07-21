@@ -13,7 +13,9 @@ from escrow.agreements.models import EscrowAgreement
 from escrow.audit.services import record_audit_event
 from escrow.delivery.models import CustomerOtpChallenge
 from escrow.delivery.services import authorize_customer_inspection_action
-from escrow.disputes.models import Dispute
+from escrow.disputes.evidence import prepare_evidence_upload
+from escrow.disputes.models import Dispute, Evidence
+from escrow.disputes.storage import store_evidence_object
 from escrow.notifications.outbox import enqueue_agreement_status_changed
 
 DISPUTE_SLA = timedelta(hours=72)
@@ -62,6 +64,73 @@ def open_customer_dispute(
         challenge.consumed_at = result.dispute.opened_at
         challenge.save(update_fields=["consumed_at"])
         return result
+
+
+def attach_customer_evidence(
+    *,
+    checkout_token: str,
+    dispute_id: UUID,
+    challenge_id: UUID,
+    dispute_token: str,
+    filename: str,
+    content: bytes,
+    s3_client: object,
+    correlation_id: str,
+    now: datetime | None = None,
+) -> Evidence:
+    """Store one validated customer file privately and persist only its metadata.
+
+    The object write happens inside the database transaction; a database
+    failure can orphan an unreferenced object, which periodic reconciliation
+    may remove. PostgreSQL never stores file contents.
+    """
+    uploaded_at = _timestamp(now)
+    with transaction.atomic():
+        agreement, _challenge = authorize_customer_inspection_action(
+            checkout_token=checkout_token,
+            challenge_id=challenge_id,
+            action_token=dispute_token,
+            purpose=CustomerOtpChallenge.Purpose.DISPUTE,
+            now=uploaded_at,
+        )
+        try:
+            dispute = Dispute.objects.select_for_update().get(
+                id=dispute_id,
+                agreement=agreement,
+            )
+        except Dispute.DoesNotExist as error:
+            raise DisputeAgreementNotFound from error
+        if agreement.status != EscrowAgreement.Status.DISPUTED:
+            raise DisputeStateConflict("evidence requires a disputed agreement")
+        prepared = prepare_evidence_upload(
+            dispute_id=dispute.id,
+            filename=filename,
+            content=content,
+        )
+        store_evidence_object(
+            s3_client,
+            object_key=prepared.object_key,
+            content=content,
+            media_type=prepared.media_type,
+        )
+        evidence = Evidence.objects.create(
+            id=prepared.evidence_id,
+            dispute=dispute,
+            object_key=prepared.object_key,
+            extension=prepared.extension,
+            media_type=prepared.media_type,
+            size_bytes=prepared.size_bytes,
+            sha256=prepared.sha256,
+            uploaded_at=uploaded_at,
+        )
+        record_audit_event(
+            event_type="evidence_uploaded",
+            organization=agreement.organization,
+            agreement=agreement,
+            correlation_id=correlation_id,
+            payload={"dispute_id": str(dispute.id), "evidence_id": str(evidence.id)},
+        )
+        return evidence
 
 
 def open_dispute_after_customer_authorization(

@@ -60,6 +60,11 @@ urlpatterns = [
         name="customer-dispute-open",
     ),
     path(
+        "api/v1/checkout/<str:checkout_token>/disputes/<uuid:dispute_id>/evidence/",
+        dispute_views.upload_customer_dispute_evidence,
+        name="customer-dispute-evidence-upload",
+    ),
+    path(
         "api/v1/checkout/<str:checkout_token>/",
         agreement_views.public_checkout,
         name="public-checkout",

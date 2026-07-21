@@ -9,6 +9,7 @@ from django.http import HttpRequest, HttpResponse
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.request import Request
 from rest_framework.response import Response
 
 from escrow.agreements.pii import PiiEncryptionUnavailable
@@ -25,11 +26,15 @@ from escrow.delivery.services import (
     request_customer_acceptance_otp,
     verify_customer_acceptance_otp,
 )
+from escrow.disputes.evidence import MAX_EVIDENCE_BYTES, EvidenceValidationError
 from escrow.disputes.services import (
+    DisputeAgreementNotFound,
     DisputeAlreadyOpen,
     DisputeStateConflict,
+    attach_customer_evidence,
     open_customer_dispute,
 )
+from escrow.disputes.storage import evidence_s3_client
 from escrow.http import InvalidJsonBody, error_response, parse_json_body
 from escrow.integrations.rate_limit import (
     check_customer_otp_send_rate_limit,
@@ -60,6 +65,20 @@ class CustomerDisputeOpenResponseSerializer(serializers.Serializer[object]):
     status = serializers.ChoiceField(choices=["OPEN"])
     opened_at = serializers.DateTimeField()
     sla_due_at = serializers.DateTimeField()
+
+
+class CustomerEvidenceUploadSerializer(serializers.Serializer[object]):
+    challenge_id = serializers.UUIDField()
+    dispute_token = serializers.CharField()
+    file = serializers.FileField()
+
+
+class CustomerEvidenceUploadResponseSerializer(serializers.Serializer[object]):
+    evidence_id = serializers.UUIDField()
+    media_type = serializers.CharField()
+    size_bytes = serializers.IntegerField()
+    sha256 = serializers.CharField()
+    uploaded_at = serializers.DateTimeField()
 
 
 @extend_schema(
@@ -209,6 +228,66 @@ def open_customer_dispute_view(
                 "status": result.dispute.status,
                 "opened_at": result.dispute.opened_at,
                 "sla_due_at": result.dispute.sla_due_at,
+            },
+            status=201,
+        )
+    )
+
+
+@extend_schema(
+    operation_id="uploadCustomerDisputeEvidence",
+    auth=[],
+    request={"multipart/form-data": CustomerEvidenceUploadSerializer},
+    responses={201: CustomerEvidenceUploadResponseSerializer},
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([])
+def upload_customer_dispute_evidence(
+    request: Request,
+    checkout_token: str,
+    dispute_id: UUID,
+) -> Response | HttpResponse:
+    """Attach one validated private file to the customer's own open dispute."""
+    upload = request.FILES.get("file")
+    dispute_token = request.data.get("dispute_token")
+    try:
+        challenge_id = UUID(str(request.data.get("challenge_id")))
+    except ValueError:
+        return _checkout_headers(error_response("validation_error", 400))
+    if upload is None or not isinstance(dispute_token, str):
+        return _checkout_headers(error_response("validation_error", 400))
+    if upload.size is None or upload.size > MAX_EVIDENCE_BYTES:
+        return _checkout_headers(error_response("validation_error", 400))
+    try:
+        evidence = attach_customer_evidence(
+            checkout_token=checkout_token,
+            dispute_id=dispute_id,
+            challenge_id=challenge_id,
+            dispute_token=dispute_token,
+            filename=upload.name or "",
+            content=upload.read(),
+            s3_client=evidence_s3_client(),
+            correlation_id=get_correlation_id(),
+        )
+    except EvidenceValidationError:
+        return _checkout_headers(error_response("validation_error", 400))
+    except (DeliveryAgreementNotFound, CustomerOtpChallengeNotFound, DisputeAgreementNotFound):
+        return _checkout_headers(error_response("not_found", 404))
+    except CustomerAcceptanceAuthorizationInvalid:
+        return _checkout_headers(error_response("customer_evidence_unauthorized", 403))
+    except DisputeStateConflict:
+        return _checkout_headers(error_response("dispute_conflict", 409))
+    except PiiEncryptionUnavailable:
+        return _checkout_headers(error_response("customer_evidence_unavailable", 503))
+    return _checkout_headers(
+        Response(
+            {
+                "evidence_id": str(evidence.id),
+                "media_type": evidence.media_type,
+                "size_bytes": evidence.size_bytes,
+                "sha256": evidence.sha256,
+                "uploaded_at": evidence.uploaded_at,
             },
             status=201,
         )
