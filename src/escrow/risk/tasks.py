@@ -13,12 +13,18 @@ from escrow.messaging.consumer import PermanentMessageError, consume_envelope_ta
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.models import OutboxEvent
 from escrow.messaging.outbox import enqueue_outbox_event
-from escrow.messaging.topology import LEDGER_FUNDING_QUEUE, LEDGER_REFUND_QUEUE, RISK_FUNDING_QUEUE
+from escrow.messaging.topology import (
+    LEDGER_FUNDING_QUEUE,
+    LEDGER_REFUND_QUEUE,
+    RISK_DISPUTE_QUEUE,
+    RISK_FUNDING_QUEUE,
+)
 from escrow.notifications.outbox import enqueue_agreement_status_changed
 from escrow.payments.models import Transfer
 from escrow.risk.models import FundingRiskDecision
 from escrow.risk.policy import FundingRiskOutcome
-from escrow.risk.services import evaluate_funding_transfer
+from escrow.risk.services import evaluate_dispute_risk_service, evaluate_funding_transfer
+
 
 _POST_FUNDING_NAMESPACE = uuid.UUID("8d4e356f-468c-40d3-b058-35b0c3dbbde9")
 _RETURN_REJECTED_FUNDING_NAMESPACE = uuid.UUID("a27da60c-126c-4de3-b2a9-0c6518c48644")
@@ -41,6 +47,38 @@ def evaluate_funding_risk(self: Any, body: object) -> bool:
         effect=_evaluate_funding_risk,
     )
     return result.processed
+
+
+@shared_task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="escrow.risk.evaluate_dispute_risk",
+    queue=RISK_DISPUTE_QUEUE.name,
+    routing_key=RISK_DISPUTE_QUEUE.name,
+)
+def evaluate_dispute_risk(self: Any, body: object) -> bool:
+    """Persist one dispute risk report and transition dispute to ANALYST_REVIEW."""
+    result = consume_envelope_task(
+        self,
+        body,
+        expected_type="EvaluateDisputeRisk.v1",
+        expected_version=1,
+        consumer=RISK_DISPUTE_QUEUE.name,
+        effect=_evaluate_dispute_risk,
+    )
+    return result.processed
+
+
+def _evaluate_dispute_risk(envelope: MessageEnvelope) -> None:
+    payload = envelope.payload
+    if set(payload) != {"agreement_id", "dispute_id"}:
+        raise PermanentMessageError("dispute risk payload is invalid")
+    dispute_id = _uuid_payload_value(payload, "dispute_id")
+    evaluate_dispute_risk_service(
+        dispute_id,
+        correlation_id=envelope.correlation_id,
+        now=timezone.now(),
+    )
+
 
 
 def _evaluate_funding_risk(envelope: MessageEnvelope) -> None:

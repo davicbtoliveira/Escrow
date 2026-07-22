@@ -15,6 +15,7 @@ from django.utils import timezone
 from escrow.agreements.lifecycle import AgreementStateConflict, resume_funding_after_review
 from escrow.agreements.models import EscrowAgreement
 from escrow.audit.services import record_audit_event
+from escrow.disputes.models import Dispute, Evidence
 from escrow.identity.models import User
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.models import OutboxEvent
@@ -22,7 +23,13 @@ from escrow.messaging.outbox import enqueue_outbox_event
 from escrow.messaging.topology import LEDGER_FUNDING_QUEUE, LEDGER_REFUND_QUEUE
 from escrow.notifications.outbox import enqueue_agreement_status_changed
 from escrow.payments.models import SandboxPixCharge, Transfer
-from escrow.risk.models import FundingRiskDecision, FundingRiskPolicy, FundingRiskReview
+from escrow.risk.models import (
+    DisputeRiskPolicy,
+    DisputeRiskReport,
+    FundingRiskDecision,
+    FundingRiskPolicy,
+    FundingRiskReview,
+)
 from escrow.risk.policy import (
     POLICY_VERSION,
     Currency,
@@ -32,6 +39,7 @@ from escrow.risk.policy import (
     default_funding_policy_configuration,
     evaluate_funding_policy,
 )
+
 
 
 class FundingRiskPolicyNotFound(RuntimeError):
@@ -133,6 +141,169 @@ def evaluate_funding_transfer(
             outcome=result.outcome,
             evaluated_at=evaluated_at,
         )
+
+
+def evaluate_dispute_risk_service(
+    dispute_id: UUID | str,
+    *,
+    correlation_id: str = "",
+    now: datetime | None = None,
+) -> DisputeRiskReport:
+    """Generate an explainable risk report for an opened dispute."""
+    evaluated_at = timezone.now() if now is None else now
+    dispute_uuid = _uuid_value(dispute_id, "dispute id")
+    effective_correlation_id = (
+        correlation_id.strip() if correlation_id and correlation_id.strip() else f"dispute-risk-{dispute_uuid}"
+    )
+    with transaction.atomic():
+        dispute = (
+            Dispute.objects.select_for_update()
+            .select_related("agreement__organization")
+            .get(id=dispute_uuid)
+        )
+        existing = (
+            DisputeRiskReport.objects.select_related("policy")
+            .filter(dispute=dispute)
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+        policy, _ = DisputeRiskPolicy.objects.get_or_create(
+            version="v1",
+            defaults={
+                "configuration": {
+                    "duplicate_evidence_score": 30,
+                    "frequent_customer_disputes_score": 25,
+                    "rapid_dispute_score": 20,
+                    "high_organization_dispute_rate_score": 25,
+                }
+            },
+        )
+
+        from escrow.delivery.models import DeliveryReport
+
+        evidences = Evidence.objects.filter(dispute=dispute)
+        evidence_hashes = list(evidences.values_list("sha256", flat=True))
+        duplicate_hashes = list(
+            Evidence.objects.filter(sha256__in=evidence_hashes)
+            .exclude(dispute=dispute)
+            .values_list("sha256", flat=True)
+            .distinct()
+        )
+
+        customer_disputes_count = (
+            Dispute.objects.filter(
+                agreement__customer_document_blind_index=dispute.agreement.customer_document_blind_index
+            )
+            .exclude(id=dispute.id)
+            .count()
+        )
+
+        org_total = EscrowAgreement.objects.filter(
+            organization=dispute.agreement.organization,
+            created_at__gte=evaluated_at - timedelta(days=30),
+        ).count()
+
+        org_disputes = Dispute.objects.filter(
+            agreement__organization=dispute.agreement.organization,
+            opened_at__gte=evaluated_at - timedelta(days=30),
+        ).count()
+
+        org_dispute_rate_bps = (
+            int((org_disputes / org_total) * 10_000) if org_total > 0 else 0
+        )
+
+        delivery_report = DeliveryReport.objects.filter(agreement=dispute.agreement).first()
+
+        score = 0
+        flags: list[str] = []
+
+        if duplicate_hashes:
+            score += 30
+            flags.append("duplicate_evidence_detected")
+
+        if customer_disputes_count >= 2:
+            score += 25
+            flags.append("customer_frequent_disputes")
+
+        if org_dispute_rate_bps > 1_000 and org_total >= 3:
+            score += 25
+            flags.append("high_organization_dispute_rate")
+
+        if delivery_report and (
+            dispute.opened_at - delivery_report.reported_at
+        ) < timedelta(minutes=1):
+            score += 20
+            flags.append("rapid_dispute_after_delivery")
+
+        if score == 0 and not flags:
+            suspicion_result = DisputeRiskReport.SuspicionResult.NO_SUSPICION
+            summary = "No suspicious risk indicators detected. The customer submitted evidence for analyst review."
+        else:
+            suspicion_result = DisputeRiskReport.SuspicionResult.SUSPICIOUS_INDICATORS
+            summary = f"Risk indicators detected: {', '.join(flags)}."
+
+        timeline = [
+            {"event": "agreement_created", "timestamp": dispute.agreement.created_at.isoformat()},
+        ]
+        if delivery_report:
+            timeline.append(
+                {"event": "delivery_reported", "timestamp": delivery_report.reported_at.isoformat()}
+            )
+        timeline.append({"event": "dispute_opened", "timestamp": dispute.opened_at.isoformat()})
+
+        report = DisputeRiskReport.objects.create(
+            dispute=dispute,
+            policy=policy,
+            policy_version=policy.version,
+            policy_configuration=policy.configuration,
+            inputs={
+                "customer_disputes_count": customer_disputes_count,
+                "organization_dispute_rate_bps": org_dispute_rate_bps,
+                "organization_agreements_30d": org_total,
+                "duplicate_hashes": duplicate_hashes,
+            },
+            summary=summary,
+            timeline=timeline,
+            customer_history={"prior_disputes_count": customer_disputes_count},
+            organization_history={
+                "total_agreements_30d": org_total,
+                "disputes_count_30d": org_disputes,
+                "dispute_rate_bps": org_dispute_rate_bps,
+            },
+            evidence_integrity={
+                "uploaded_count": len(evidence_hashes),
+                "duplicate_hashes_detected": duplicate_hashes,
+            },
+            score=min(100, score),
+            flags=flags,
+            suspicion_result=suspicion_result,
+            generated_at=evaluated_at,
+        )
+
+        dispute.status = Dispute.Status.ANALYST_REVIEW
+        dispute.save(update_fields=["status", "updated_at"])
+
+        enqueue_agreement_status_changed(
+            dispute.agreement,
+            correlation_id=effective_correlation_id,
+            causation_id=str(report.id),
+        )
+
+        record_audit_event(
+            event_type="dispute_risk_report_generated",
+            organization=dispute.agreement.organization,
+            agreement=dispute.agreement,
+            correlation_id=effective_correlation_id,
+            payload={
+                "dispute_id": str(dispute.id),
+                "report_id": str(report.id),
+                "suspicion_result": suspicion_result,
+            },
+        )
+        return report
+
 
 
 def funding_policy_configuration() -> dict[str, Any]:
