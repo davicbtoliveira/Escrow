@@ -97,3 +97,64 @@ class FundingRiskReview(models.Model):
                 name="risk_review_outcome_01d9fd_idx",
             )
         ]
+
+
+class DisputeRiskPolicy(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    version = models.CharField(max_length=64, unique=True)
+    configuration = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
+class DisputeRiskReport(models.Model):
+    """An explainable risk evaluation generated for an opened dispute."""
+
+    class SuspicionResult(models.TextChoices):
+        NO_SUSPICION = "NO_SUSPICION", "No suspicion"
+        SUSPICIOUS_INDICATORS = "SUSPICIOUS_INDICATORS", "Suspicious indicators"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dispute = models.OneToOneField(
+        "disputes.Dispute",
+        on_delete=models.PROTECT,
+        related_name="risk_report",
+    )
+    policy = models.ForeignKey(
+        DisputeRiskPolicy,
+        on_delete=models.PROTECT,
+        related_name="reports",
+    )
+    policy_version = models.CharField(max_length=64)
+    policy_configuration = models.JSONField(default=dict)
+    inputs = models.JSONField(default=dict)
+    summary = models.TextField()
+    timeline = models.JSONField(default=list)
+    customer_history = models.JSONField(default=dict)
+    organization_history = models.JSONField(default=dict)
+    evidence_integrity = models.JSONField(default=dict)
+    score = models.PositiveSmallIntegerField()
+    flags = models.JSONField(default=list)
+    suspicion_result = models.CharField(
+        max_length=32,
+        choices=SuspicionResult.choices,
+        default=SuspicionResult.NO_SUSPICION,
+    )
+    generated_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["generated_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(score__gte=0) & models.Q(score__lte=100),
+                name="risk_dispute_score_between_0_and_100",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(suspicion_result__in=["NO_SUSPICION", "SUSPICIOUS_INDICATORS"]),
+                name="risk_dispute_suspicion_result_is_known",
+            ),
+        ]
+

@@ -113,3 +113,49 @@ class EvidenceAccessGrant(models.Model):
             )
         ]
         indexes = [models.Index(fields=["evidence", "expires_at"])]
+
+
+class DisputeRecommendation(models.Model):
+    """One attributable analyst recommendation submitted to ADMIN_REVIEW."""
+
+    class Choice(models.TextChoices):
+        RELEASE_TO_ORGANIZATION = "RELEASE_TO_ORGANIZATION", "Release to organization"
+        REFUND_TO_CUSTOMER = "REFUND_TO_CUSTOMER", "Refund to customer"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dispute = models.OneToOneField(
+        Dispute,
+        on_delete=models.PROTECT,
+        related_name="analyst_recommendation",
+    )
+    report = models.ForeignKey(
+        "risk.DisputeRiskReport",
+        on_delete=models.PROTECT,
+        related_name="recommendations",
+    )
+    analyst = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="dispute_recommendations",
+    )
+    command_id = models.CharField(max_length=128, unique=True)
+    recommendation = models.CharField(max_length=32, choices=Choice.choices)
+    rationale = models.TextField(max_length=1_000)
+    recommended_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["recommended_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    recommendation__in=["RELEASE_TO_ORGANIZATION", "REFUND_TO_CUSTOMER"]
+                ),
+                name="disputes_recommendation_choice_is_known",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(command_id=""),
+                name="disputes_recommendation_command_id_not_empty",
+            ),
+        ]
+
