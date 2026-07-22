@@ -12,6 +12,8 @@ from django.views.decorators.http import require_GET, require_POST
 from escrow.agreements.services import AgreementValidationError, validate_idempotency_key
 from escrow.correlation import get_correlation_id
 from escrow.disputes.services import (
+    DisputeAdminForbidden,
+    DisputeAdminSeparationError,
     DisputeAgreementNotFound,
     DisputeRecommendationConflict,
     DisputeRecommendationForbidden,
@@ -20,9 +22,12 @@ from escrow.disputes.services import (
     EvidenceAccessExpired,
     EvidenceAccessForbidden,
     EvidenceNotFound,
+    decrypt_dispute_customer_pii,
     download_evidence_with_grant,
+    get_dispute_admin_dashboard,
     get_dispute_analyst_dashboard,
     issue_evidence_access_grant,
+    resolve_dispute_by_admin,
     submit_dispute_recommendation,
 )
 from escrow.disputes.storage import evidence_s3_client
@@ -138,4 +143,95 @@ def submit_dispute_recommendation_view(request: HttpRequest, dispute_id: UUID) -
         },
         status=202,
     )
+
+
+@require_GET
+@session_required
+def dispute_admin_dashboard_view(request: HttpRequest) -> HttpResponse:
+    """Return SLA counts and admin decision queues for PLATFORM_ADMIN."""
+    try:
+        dashboard = get_dispute_admin_dashboard(admin=cast(User, request.user))
+    except DisputeAdminForbidden:
+        return error_response("platform_admin_required", 403)
+    return JsonResponse(dashboard)
+
+
+@require_POST
+@csrf_protect
+@session_required
+def decrypt_dispute_customer_pii_view(request: HttpRequest, dispute_id: UUID) -> HttpResponse:
+    """Decrypt customer PII for PLATFORM_ADMIN audit investigation."""
+    try:
+        payload = parse_json_body(request)
+        reason = payload.get("reason")
+        if not isinstance(reason, str):
+            raise InvalidJsonBody
+        decrypted = decrypt_dispute_customer_pii(
+            dispute_id=dispute_id,
+            admin=cast(User, request.user),
+            reason=reason,
+            correlation_id=get_correlation_id(),
+        )
+    except DisputeAdminForbidden:
+        return error_response("platform_admin_required", 403)
+    except DisputeAgreementNotFound:
+        return error_response("not_found", 404)
+    except (InvalidJsonBody, DisputeRecommendationValidationError):
+        return error_response("validation_error", 400)
+
+    response = JsonResponse({"customer": decrypted})
+    response["Cache-Control"] = "no-store, private"
+    response["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@require_POST
+@csrf_protect
+@session_required
+def resolve_dispute_admin_decision_view(request: HttpRequest, dispute_id: UUID) -> HttpResponse:
+    """Execute final PLATFORM_ADMIN decision to release or refund disputed funds."""
+    command_header = request.headers.get("Idempotency-Key")
+    if command_header is None or not command_header.strip():
+        return error_response("idempotency_key_required", 400)
+    try:
+        payload = parse_json_body(request)
+        if set(payload) != {"decision", "rationale"}:
+            raise InvalidJsonBody
+        decision = payload["decision"]
+        rationale = payload["rationale"]
+        command_id = validate_idempotency_key(command_header)
+        if not isinstance(decision, str) or not isinstance(rationale, str):
+            raise InvalidJsonBody
+    except (AgreementValidationError, InvalidJsonBody):
+        return error_response("validation_error", 400)
+    try:
+        admin_decision, replayed = resolve_dispute_by_admin(
+            dispute_id=dispute_id,
+            admin=cast(User, request.user),
+            decision=decision,
+            command_id=command_id,
+            rationale=rationale,
+            correlation_id=get_correlation_id(),
+        )
+    except DisputeAdminForbidden:
+        return error_response("platform_admin_required", 403)
+    except DisputeAgreementNotFound:
+        return error_response("not_found", 404)
+    except (DisputeRecommendationConflict, DisputeStateConflict, DisputeAdminSeparationError):
+        return error_response("dispute_resolution_conflict", 409)
+    except DisputeRecommendationValidationError:
+        return error_response("validation_error", 400)
+
+    return JsonResponse(
+        {
+            "decision": {
+                "id": str(admin_decision.id),
+                "dispute_id": str(admin_decision.dispute_id),
+                "decision": admin_decision.decision,
+                "replayed": replayed,
+            }
+        },
+        status=202,
+    )
+
 

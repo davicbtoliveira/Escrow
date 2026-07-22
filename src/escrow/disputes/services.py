@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -13,19 +14,26 @@ from django.db import transaction
 from django.utils import timezone
 
 from escrow.agreements.models import EscrowAgreement
+from escrow.agreements.money import calculate_release_fee_minor
+from escrow.agreements.pii import CustomerIdentity, EncryptedValue, envelope_cipher
+from escrow.agreements.services import customer_pii_context
 from escrow.audit.services import record_audit_event
 from escrow.delivery.models import CustomerOtpChallenge
 from escrow.delivery.services import authorize_customer_inspection_action
 from escrow.disputes.evidence import prepare_evidence_upload
-from escrow.disputes.models import Dispute, DisputeRecommendation, Evidence, EvidenceAccessGrant
+from escrow.disputes.models import Dispute, DisputeAdminDecision, DisputeRecommendation, Evidence, EvidenceAccessGrant
 from escrow.disputes.storage import presign_evidence_download, store_evidence_object
 from escrow.identity.models import User
+from escrow.ledger.models import LedgerTransaction
+from escrow.ledger.services import LedgerEntryInput, LedgerPosting, post_ledger_transaction
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.outbox import enqueue_outbox_event
 from escrow.messaging.topology import RISK_DISPUTE_QUEUE
 from escrow.notifications.outbox import enqueue_agreement_status_changed
+from escrow.payments.models import Transfer
 from escrow.risk.models import DisputeRiskReport
 from escrow.risk.services import PLATFORM_ADMIN_GROUP, RISK_DISPUTE_ANALYST_GROUP
+
 
 DISPUTE_SLA = timedelta(hours=72)
 _EVALUATE_DISPUTE_RISK_NAMESPACE = UUID("7c3f819a-9e12-4277-b9c1-45607593c200")
@@ -65,6 +73,15 @@ class DisputeRecommendationConflict(RuntimeError):
 
 class DisputeRecommendationValidationError(ValueError):
     """The recommendation payload or command ID is invalid."""
+
+
+class DisputeAdminForbidden(PermissionError):
+    """The caller lacks the platform admin role required for administrative dispute actions."""
+
+
+class DisputeAdminSeparationError(RuntimeError):
+    """The analyst who submitted the recommendation cannot approve it as admin."""
+
 
 
 
@@ -548,10 +565,384 @@ def submit_dispute_recommendation(
         return rec, False
 
 
+def require_platform_admin(admin: User) -> None:
+    """Enforce an explicit platform-admin role with no analyst-only access."""
+    if not admin.is_active or not admin.is_staff:
+        raise DisputeAdminForbidden("platform admin capability is required")
+    if not admin.groups.filter(name=PLATFORM_ADMIN_GROUP).exists():
+        raise DisputeAdminForbidden("platform admin capability is required")
+
+
+def decrypt_dispute_customer_pii(
+    *,
+    dispute_id: UUID | str,
+    admin: User,
+    reason: str,
+    correlation_id: str = "",
+) -> dict[str, str]:
+    """Decrypt customer PII for platform admin investigation after recording audit event."""
+    require_platform_admin(admin)
+    if not isinstance(reason, str) or not reason.strip() or len(reason.strip()) > 1_000:
+        raise DisputeRecommendationValidationError("reason is invalid")
+
+    norm_reason = reason.strip()
+    try:
+        dispute_uuid = dispute_id if isinstance(dispute_id, UUID) else UUID(str(dispute_id))
+    except (TypeError, ValueError) as error:
+        raise DisputeRecommendationValidationError("dispute_id is invalid") from error
+
+    eff_correlation_id = (
+        correlation_id.strip()
+        if correlation_id and correlation_id.strip()
+        else f"dispute-pii-{dispute_uuid}"
+    )
+
+    with transaction.atomic():
+        try:
+            dispute = (
+                Dispute.objects.select_for_update()
+                .select_related("agreement__organization")
+                .get(id=dispute_uuid)
+            )
+        except Dispute.DoesNotExist as error:
+            raise DisputeAgreementNotFound from error
+
+        agreement = dispute.agreement
+        cipher = envelope_cipher()
+        encrypted = EncryptedValue(
+            ciphertext=agreement.customer_pii_ciphertext,
+            nonce=agreement.customer_pii_nonce,
+            encrypted_data_key=agreement.customer_pii_encrypted_data_key,
+            kms_key_id=agreement.customer_pii_kms_key_id,
+        )
+        context = customer_pii_context(agreement.organization_id, agreement.id)
+        plaintext_bytes = cipher.decrypt(encrypted, context)
+        plaintext_dict = json.loads(plaintext_bytes.decode())
+        customer = CustomerIdentity(
+            name=plaintext_dict["name"],
+            email=plaintext_dict["email"],
+            document=plaintext_dict["document"],
+            document_kind=agreement.customer_document_kind,
+        )
+
+        record_audit_event(
+            event_type="dispute_customer_pii_decrypted",
+            organization=agreement.organization,
+            agreement=agreement,
+            actor=admin,
+            correlation_id=eff_correlation_id,
+            payload={
+                "dispute_id": str(dispute.id),
+                "reason": norm_reason,
+            },
+        )
+
+        return {
+            "name": customer.name,
+            "email": customer.email,
+            "document": customer.document,
+            "document_kind": customer.document_kind,
+        }
+
+
+def get_dispute_admin_dashboard(
+    *,
+    admin: User,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Return administrative dispute queue and SLA metrics for PLATFORM_ADMIN."""
+    require_platform_admin(admin)
+    current_time = _timestamp(now)
+
+    all_disputes = Dispute.objects.select_related(
+        "agreement__organization"
+    ).prefetch_related("risk_report", "analyst_recommendation", "admin_decision").all()
+
+    counts = {
+        "open": 0,
+        "closed": 0,
+        "at_risk": 0,
+        "overdue": 0,
+        "awaiting_admin_decision": 0,
+    }
+
+    queue_items: list[dict[str, object]] = []
+
+    for dispute in all_disputes:
+        is_closed = (dispute.status == Dispute.Status.RESOLVED)
+        if is_closed:
+            counts["closed"] += 1
+        else:
+            counts["open"] += 1
+            if dispute.status == Dispute.Status.ADMIN_REVIEW:
+                counts["awaiting_admin_decision"] += 1
+
+            sla_reference_time = (
+                dispute.admin_decision.decided_at
+                if hasattr(dispute, "admin_decision") and dispute.admin_decision
+                else current_time
+            )
+            elapsed = sla_reference_time - dispute.opened_at
+
+            if elapsed < timedelta(hours=48):
+                sla_status = "ON_TRACK"
+            elif elapsed <= timedelta(hours=72):
+                sla_status = "AT_RISK"
+                counts["at_risk"] += 1
+            else:
+                sla_status = "OVERDUE"
+                counts["overdue"] += 1
+
+        if dispute.status == Dispute.Status.ADMIN_REVIEW:
+            agreement = dispute.agreement
+            org = agreement.organization
+
+            report_data = None
+            if hasattr(dispute, "risk_report") and dispute.risk_report:
+                rep: DisputeRiskReport = dispute.risk_report
+                report_data = {
+                    "id": str(rep.id),
+                    "summary": rep.summary,
+                    "suspicion_result": rep.suspicion_result,
+                    "score": rep.score,
+                    "flags": rep.flags,
+                    "policy_version": rep.policy_version,
+                    "timeline": rep.timeline,
+                    "customer_history": rep.customer_history,
+                    "organization_history": rep.organization_history,
+                    "evidence_integrity": rep.evidence_integrity,
+                    "inputs": rep.inputs,
+                    "generated_at": rep.generated_at.isoformat().replace("+00:00", "Z"),
+                }
+
+            rec_data = None
+            if hasattr(dispute, "analyst_recommendation") and dispute.analyst_recommendation:
+                rec: DisputeRecommendation = dispute.analyst_recommendation
+                rec_data = {
+                    "id": str(rec.id),
+                    "analyst_id": str(rec.analyst_id),
+                    "recommendation": rec.recommendation,
+                    "rationale": rec.rationale,
+                    "recommended_at": rec.recommended_at.isoformat().replace("+00:00", "Z"),
+                }
+
+            queue_items.append(
+                {
+                    "dispute_id": str(dispute.id),
+                    "agreement_id": str(agreement.id),
+                    "status": dispute.status,
+                    "sla_status": sla_status,
+                    "opened_at": dispute.opened_at.isoformat().replace("+00:00", "Z"),
+                    "sla_due_at": dispute.sla_due_at.isoformat().replace("+00:00", "Z"),
+                    "organization": {
+                        "id": str(org.id),
+                        "name_masked": f"{org.name[:1]}***" if org.name else "***",
+                    },
+                    "customer": {
+                        "name": agreement.customer_name_masked,
+                        "email_masked": agreement.customer_email_masked,
+                        "document_masked": agreement.customer_document_masked,
+                    },
+                    "amount_minor": agreement.amount_minor,
+                    "currency": agreement.currency,
+                    "report": report_data,
+                    "recommendation": rec_data,
+                }
+            )
+
+    return {"counts": counts, "queue": queue_items}
+
+
+def resolve_dispute_by_admin(
+    *,
+    dispute_id: UUID | str,
+    admin: User,
+    decision: str,
+    command_id: str,
+    rationale: str,
+    correlation_id: str = "",
+    now: datetime | None = None,
+) -> tuple[DisputeAdminDecision, bool]:
+    """Execute the final PLATFORM_ADMIN decision, posting ledger entry and resolving dispute."""
+    require_platform_admin(admin)
+    if decision not in DisputeAdminDecision.Choice.values:
+        raise DisputeRecommendationValidationError("decision choice is invalid")
+    if not isinstance(command_id, str) or not command_id.strip() or len(command_id.strip()) > 128:
+        raise DisputeRecommendationValidationError("command_id is invalid")
+    if not isinstance(rationale, str) or not rationale.strip() or len(rationale.strip()) > 1_000:
+        raise DisputeRecommendationValidationError("rationale is invalid")
+
+    norm_command_id = command_id.strip()
+    norm_rationale = rationale.strip()
+    decided_at = _timestamp(now)
+    try:
+        dispute_uuid = dispute_id if isinstance(dispute_id, UUID) else UUID(str(dispute_id))
+    except (TypeError, ValueError) as error:
+        raise DisputeRecommendationValidationError("dispute_id is invalid") from error
+
+    eff_correlation_id = (
+        correlation_id.strip()
+        if correlation_id and correlation_id.strip()
+        else f"dispute-admin-{dispute_uuid}"
+    )
+
+    with transaction.atomic():
+        try:
+            dispute = (
+                Dispute.objects.select_for_update()
+                .select_related("agreement__organization", "analyst_recommendation")
+                .get(id=dispute_uuid)
+            )
+        except Dispute.DoesNotExist as error:
+            raise DisputeAgreementNotFound from error
+
+        existing = (
+            DisputeAdminDecision.objects.select_for_update()
+            .filter(dispute=dispute)
+            .first()
+        )
+        if existing is not None:
+            if existing.command_id == norm_command_id:
+                if existing.decision == decision and existing.rationale == norm_rationale:
+                    return existing, True
+                raise DisputeRecommendationValidationError(
+                    "command intent differs from first execution"
+                )
+            raise DisputeRecommendationConflict("dispute has already been resolved by admin")
+
+        if dispute.status != Dispute.Status.ADMIN_REVIEW:
+            raise DisputeStateConflict("dispute resolution requires ADMIN_REVIEW status")
+
+        try:
+            rec = dispute.analyst_recommendation
+        except Exception:
+            rec = DisputeRecommendation.objects.filter(dispute=dispute).first()
+            if rec is None:
+                raise DisputeStateConflict("analyst recommendation must exist before admin resolution")
+
+        if rec.analyst_id == admin.id:
+            raise DisputeAdminSeparationError(
+                "separation of duties: analyst who recommended cannot be the admin who approves"
+            )
+
+        agreement = dispute.agreement
+
+        if decision == DisputeAdminDecision.Choice.RELEASE_TO_ORGANIZATION:
+            release_transfer, _ = Transfer.objects.get_or_create(
+                agreement=agreement,
+                kind=Transfer.Kind.RELEASE,
+                defaults={
+                    "status": Transfer.Status.PENDING,
+                    "amount_minor": agreement.amount_minor,
+                    "currency": agreement.currency,
+                    "provider": Transfer.Provider.INTERNAL,
+                    "provider_reference": f"release-{agreement.id}",
+                    "idempotency_key": f"release-{agreement.id}",
+                },
+            )
+            fee_minor = calculate_release_fee_minor(agreement.amount_minor, agreement.fee_bps)
+            net_minor = agreement.amount_minor - fee_minor
+            entries = [
+                LedgerEntryInput.debit("ESCROW_LIABILITY", agreement.amount_minor, agreement.currency),
+            ]
+            if net_minor > 0:
+                entries.append(
+                    LedgerEntryInput.credit("ORGANIZATION_PAYABLE", net_minor, agreement.currency)
+                )
+            if fee_minor > 0:
+                entries.append(
+                    LedgerEntryInput.credit("PLATFORM_FEE_REVENUE", fee_minor, agreement.currency)
+                )
+
+            post_ledger_transaction(
+                LedgerPosting(
+                    transfer_id=release_transfer.id,
+                    kind=LedgerTransaction.Kind.FUNDS_RELEASED,
+                    currency=agreement.currency,
+                    idempotency_key=f"dispute-released:{dispute.id}",
+                    entries=tuple(entries),
+                )
+            )
+            agreement.status = EscrowAgreement.Status.RELEASED
+            agreement.version += 1
+            agreement.realtime_sequence += 1
+            agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+            release_transfer.status = Transfer.Status.COMPLETED
+            release_transfer.save(update_fields=["status", "updated_at"])
+
+        elif decision == DisputeAdminDecision.Choice.REFUND_TO_CUSTOMER:
+            refund_transfer, _ = Transfer.objects.get_or_create(
+                agreement=agreement,
+                kind=Transfer.Kind.REFUND,
+                defaults={
+                    "status": Transfer.Status.PENDING,
+                    "amount_minor": agreement.amount_minor,
+                    "currency": agreement.currency,
+                    "provider": Transfer.Provider.INTERNAL,
+                    "provider_reference": f"refund-{agreement.id}",
+                    "idempotency_key": f"refund-{agreement.id}",
+                },
+            )
+            post_ledger_transaction(
+                LedgerPosting(
+                    transfer_id=refund_transfer.id,
+                    kind=LedgerTransaction.Kind.FUNDS_REFUNDED,
+                    currency=agreement.currency,
+                    idempotency_key=f"dispute-refunded:{dispute.id}",
+                    entries=(
+                        LedgerEntryInput.debit("ESCROW_LIABILITY", agreement.amount_minor, agreement.currency),
+                        LedgerEntryInput.credit("PIX_CLEARING", agreement.amount_minor, agreement.currency),
+                    ),
+                )
+            )
+            agreement.status = EscrowAgreement.Status.REFUNDED
+            agreement.version += 1
+            agreement.realtime_sequence += 1
+            agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+            refund_transfer.status = Transfer.Status.COMPLETED
+            refund_transfer.save(update_fields=["status", "updated_at"])
+
+        admin_decision = DisputeAdminDecision.objects.create(
+            dispute=dispute,
+            recommendation=rec,
+            admin=admin,
+            command_id=norm_command_id,
+            decision=decision,
+            rationale=norm_rationale,
+            decided_at=decided_at,
+        )
+
+        dispute.status = Dispute.Status.RESOLVED
+        dispute.save(update_fields=["status", "updated_at"])
+
+        enqueue_agreement_status_changed(
+            agreement,
+            correlation_id=eff_correlation_id,
+            causation_id=str(admin_decision.id),
+        )
+
+        record_audit_event(
+            event_type="dispute_admin_decision_resolved",
+            organization=agreement.organization,
+            agreement=agreement,
+            actor=admin,
+            correlation_id=eff_correlation_id,
+            payload={
+                "dispute_id": str(dispute.id),
+                "decision_id": str(admin_decision.id),
+                "decision": decision,
+                "command_id": norm_command_id,
+            },
+        )
+
+        return admin_decision, False
+
+
 def _timestamp(now: datetime | None) -> datetime:
     if now is None:
         return timezone.now()
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     return now
+
 
