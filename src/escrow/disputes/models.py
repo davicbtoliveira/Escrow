@@ -159,3 +159,49 @@ class DisputeRecommendation(models.Model):
             ),
         ]
 
+
+class DisputeAdminDecision(models.Model):
+    """The single final human decision by PLATFORM_ADMIN resolving a dispute."""
+
+    class Choice(models.TextChoices):
+        RELEASE_TO_ORGANIZATION = "RELEASE_TO_ORGANIZATION", "Release to organization"
+        REFUND_TO_CUSTOMER = "REFUND_TO_CUSTOMER", "Refund to customer"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    dispute = models.OneToOneField(
+        Dispute,
+        on_delete=models.PROTECT,
+        related_name="admin_decision",
+    )
+    recommendation = models.ForeignKey(
+        DisputeRecommendation,
+        on_delete=models.PROTECT,
+        related_name="admin_decisions",
+    )
+    admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="dispute_admin_decisions",
+    )
+    command_id = models.CharField(max_length=128, unique=True)
+    decision = models.CharField(max_length=32, choices=Choice.choices)
+    rationale = models.TextField(max_length=1_000)
+    decided_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["decided_at", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    decision__in=["RELEASE_TO_ORGANIZATION", "REFUND_TO_CUSTOMER"]
+                ),
+                name="disputes_admin_decision_choice_is_known",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(command_id=""),
+                name="disputes_admin_decision_command_id_not_empty",
+            ),
+        ]
+
+
