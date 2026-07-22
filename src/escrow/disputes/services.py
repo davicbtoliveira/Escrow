@@ -20,10 +20,15 @@ from escrow.disputes.evidence import prepare_evidence_upload
 from escrow.disputes.models import Dispute, Evidence, EvidenceAccessGrant
 from escrow.disputes.storage import presign_evidence_download, store_evidence_object
 from escrow.identity.models import User
+from escrow.messaging.envelope import MessageEnvelope
+from escrow.messaging.outbox import enqueue_outbox_event
+from escrow.messaging.topology import RISK_DISPUTE_QUEUE
 from escrow.notifications.outbox import enqueue_agreement_status_changed
 from escrow.risk.services import PLATFORM_ADMIN_GROUP, RISK_DISPUTE_ANALYST_GROUP
 
 DISPUTE_SLA = timedelta(hours=72)
+_EVALUATE_DISPUTE_RISK_NAMESPACE = UUID("7c3f819a-9e12-4277-b9c1-45607593c200")
+
 
 
 class DisputeAgreementNotFound(LookupError):
@@ -287,11 +292,28 @@ def open_dispute_after_customer_authorization(
             agreement=agreement,
             opened_at=opened_at,
             sla_due_at=opened_at + DISPUTE_SLA,
+            status=Dispute.Status.REPORT_GENERATING,
         )
         agreement.status = EscrowAgreement.Status.DISPUTED
         agreement.version += 1
         agreement.realtime_sequence += 1
         agreement.save(update_fields=["status", "version", "realtime_sequence", "updated_at"])
+        enqueue_outbox_event(
+            MessageEnvelope.build(
+                message_id=UUID(int=dispute.id.int ^ _EVALUATE_DISPUTE_RISK_NAMESPACE.int),
+                message_type="EvaluateDisputeRisk.v1",
+                version=1,
+                occurred_at=opened_at,
+                correlation_id=correlation_id,
+                causation_id=str(dispute.id),
+                tenant_id=str(agreement.organization_id),
+                payload={
+                    "agreement_id": str(agreement.id),
+                    "dispute_id": str(dispute.id),
+                },
+            ),
+            routing_key=RISK_DISPUTE_QUEUE.name,
+        )
         enqueue_agreement_status_changed(
             agreement,
             correlation_id=correlation_id,

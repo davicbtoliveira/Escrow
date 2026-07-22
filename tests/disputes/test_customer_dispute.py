@@ -178,7 +178,7 @@ class CustomerDisputeOpenApiTests(TestCase):
 
         assert opened.status_code == 201
         body = opened.json()
-        assert body["status"] == "OPEN"
+        assert body["status"] == "REPORT_GENERATING"
         assert set(body) == {"dispute_id", "status", "opened_at", "sla_due_at"}
 
         self.agreement.refresh_from_db()

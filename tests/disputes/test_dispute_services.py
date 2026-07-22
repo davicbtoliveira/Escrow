@@ -60,7 +60,7 @@ class OpenDisputeTests(TestCase):
         )
 
         self.agreement.refresh_from_db()
-        assert result.dispute.status == Dispute.Status.OPEN
+        assert result.dispute.status == Dispute.Status.REPORT_GENERATING
         assert result.dispute.agreement_id == self.agreement.id
         assert result.dispute.sla_due_at == result.dispute.opened_at + timedelta(hours=72)
         assert self.agreement.status == EscrowAgreement.Status.DISPUTED
