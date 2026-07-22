@@ -17,18 +17,18 @@ from escrow.audit.services import record_audit_event
 from escrow.delivery.models import CustomerOtpChallenge
 from escrow.delivery.services import authorize_customer_inspection_action
 from escrow.disputes.evidence import prepare_evidence_upload
-from escrow.disputes.models import Dispute, Evidence, EvidenceAccessGrant
+from escrow.disputes.models import Dispute, DisputeRecommendation, Evidence, EvidenceAccessGrant
 from escrow.disputes.storage import presign_evidence_download, store_evidence_object
 from escrow.identity.models import User
 from escrow.messaging.envelope import MessageEnvelope
 from escrow.messaging.outbox import enqueue_outbox_event
 from escrow.messaging.topology import RISK_DISPUTE_QUEUE
 from escrow.notifications.outbox import enqueue_agreement_status_changed
+from escrow.risk.models import DisputeRiskReport
 from escrow.risk.services import PLATFORM_ADMIN_GROUP, RISK_DISPUTE_ANALYST_GROUP
 
 DISPUTE_SLA = timedelta(hours=72)
 _EVALUATE_DISPUTE_RISK_NAMESPACE = UUID("7c3f819a-9e12-4277-b9c1-45607593c200")
-
 
 
 class DisputeAgreementNotFound(LookupError):
@@ -53,6 +53,19 @@ class EvidenceAccessForbidden(PermissionError):
 
 class EvidenceAccessExpired(RuntimeError):
     """A time-limited evidence access grant is no longer valid."""
+
+
+class DisputeRecommendationForbidden(PermissionError):
+    """The caller lacks the risk analyst role required for recommendations."""
+
+
+class DisputeRecommendationConflict(RuntimeError):
+    """The dispute has already been recommended or is not in ANALYST_REVIEW."""
+
+
+class DisputeRecommendationValidationError(ValueError):
+    """The recommendation payload or command ID is invalid."""
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,9 +342,216 @@ def open_dispute_after_customer_authorization(
         return OpenDisputeResult(dispute=dispute)
 
 
+def get_dispute_analyst_dashboard(
+    *,
+    analyst: User,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Return counts and masked dispute queues for authorized analysts only."""
+    _require_evidence_reader(analyst)
+    current_time = _timestamp(now)
+
+    active_disputes = Dispute.objects.select_related(
+        "agreement__organization"
+    ).prefetch_related("risk_report", "analyst_recommendation").all()
+
+    counts = {
+        "OPEN": 0,
+        "REPORT_GENERATING": 0,
+        "ANALYST_REVIEW": 0,
+        "ADMIN_REVIEW": 0,
+        "on_track": 0,
+        "at_risk": 0,
+        "overdue": 0,
+    }
+
+    queue_items: list[dict[str, object]] = []
+
+    for dispute in active_disputes:
+        if dispute.status in counts:
+            counts[dispute.status] += 1
+
+        if dispute.status != Dispute.Status.RESOLVED:
+            elapsed = current_time - dispute.opened_at
+            if elapsed < timedelta(hours=48):
+                sla_status = "ON_TRACK"
+                counts["on_track"] += 1
+            elif elapsed <= timedelta(hours=72):
+                sla_status = "AT_RISK"
+                counts["at_risk"] += 1
+            else:
+                sla_status = "OVERDUE"
+                counts["overdue"] += 1
+
+            agreement = dispute.agreement
+            org = agreement.organization
+
+            report_data = None
+            if hasattr(dispute, "risk_report") and dispute.risk_report:
+                rep: DisputeRiskReport = dispute.risk_report
+                report_data = {
+                    "id": str(rep.id),
+                    "summary": rep.summary,
+                    "suspicion_result": rep.suspicion_result,
+                    "score": rep.score,
+                    "flags": rep.flags,
+                    "policy_version": rep.policy_version,
+                    "timeline": rep.timeline,
+                    "customer_history": rep.customer_history,
+                    "organization_history": rep.organization_history,
+                    "evidence_integrity": rep.evidence_integrity,
+                    "inputs": rep.inputs,
+                    "generated_at": rep.generated_at.isoformat().replace("+00:00", "Z"),
+                }
+
+            rec_data = None
+            if hasattr(dispute, "analyst_recommendation") and dispute.analyst_recommendation:
+                rec: DisputeRecommendation = dispute.analyst_recommendation
+                rec_data = {
+                    "id": str(rec.id),
+                    "recommendation": rec.recommendation,
+                    "rationale": rec.rationale,
+                    "recommended_at": rec.recommended_at.isoformat().replace("+00:00", "Z"),
+                }
+
+            queue_items.append(
+                {
+                    "dispute_id": str(dispute.id),
+                    "agreement_id": str(agreement.id),
+                    "status": dispute.status,
+                    "sla_status": sla_status,
+                    "opened_at": dispute.opened_at.isoformat().replace("+00:00", "Z"),
+                    "sla_due_at": dispute.sla_due_at.isoformat().replace("+00:00", "Z"),
+                    "organization": {
+                        "id": str(org.id),
+                        "name_masked": f"{org.name[:1]}***" if org.name else "***",
+                    },
+                    "customer": {
+                        "name": agreement.customer_name_masked,
+                        "email_masked": agreement.customer_email_masked,
+                        "document_masked": agreement.customer_document_masked,
+                    },
+                    "amount_minor": agreement.amount_minor,
+                    "currency": agreement.currency,
+                    "report": report_data,
+                    "recommendation": rec_data,
+                }
+            )
+
+    return {"counts": counts, "queue": queue_items}
+
+
+def submit_dispute_recommendation(
+    *,
+    dispute_id: UUID | str,
+    analyst: User,
+    recommendation: str,
+    command_id: str,
+    rationale: str,
+    correlation_id: str = "",
+    now: datetime | None = None,
+) -> tuple[DisputeRecommendation, bool]:
+    """Commit one analyst recommendation and transition dispute to ADMIN_REVIEW."""
+    _require_evidence_reader(analyst)
+    if recommendation not in DisputeRecommendation.Choice.values:
+        raise DisputeRecommendationValidationError("recommendation choice is invalid")
+    if not isinstance(command_id, str) or not command_id.strip() or len(command_id.strip()) > 128:
+        raise DisputeRecommendationValidationError("command_id is invalid")
+    if not isinstance(rationale, str) or not rationale.strip() or len(rationale.strip()) > 1_000:
+        raise DisputeRecommendationValidationError("rationale is invalid")
+
+    norm_command_id = command_id.strip()
+    norm_rationale = rationale.strip()
+    recommended_at = _timestamp(now)
+    try:
+        dispute_uuid = dispute_id if isinstance(dispute_id, UUID) else UUID(str(dispute_id))
+    except (TypeError, ValueError) as error:
+        raise DisputeRecommendationValidationError("dispute_id is invalid") from error
+
+    eff_correlation_id = (
+        correlation_id.strip()
+        if correlation_id and correlation_id.strip()
+        else f"dispute-rec-{dispute_uuid}"
+    )
+
+    with transaction.atomic():
+        try:
+            dispute = (
+                Dispute.objects.select_for_update()
+                .select_related("agreement__organization")
+                .get(id=dispute_uuid)
+            )
+        except Dispute.DoesNotExist as error:
+            raise DisputeAgreementNotFound from error
+
+        existing = (
+            DisputeRecommendation.objects.select_for_update()
+            .filter(dispute=dispute)
+            .first()
+        )
+        if existing is not None:
+            if existing.command_id == norm_command_id:
+                if (
+                    existing.recommendation == recommendation
+                    and existing.rationale == norm_rationale
+                ):
+                    return existing, True
+                raise DisputeRecommendationValidationError(
+                    "command intent differs from first execution"
+                )
+            raise DisputeRecommendationConflict("dispute has already been recommended")
+
+        if dispute.status != Dispute.Status.ANALYST_REVIEW:
+            raise DisputeStateConflict("dispute recommendation requires ANALYST_REVIEW status")
+
+        try:
+            report = dispute.risk_report
+        except Exception:
+            report = DisputeRiskReport.objects.filter(dispute=dispute).first()
+            if report is None:
+                raise DisputeStateConflict(
+                    "dispute risk report must exist before recommendation"
+                )
+
+        rec = DisputeRecommendation.objects.create(
+            dispute=dispute,
+            report=report,
+            analyst=analyst,
+            command_id=norm_command_id,
+            recommendation=recommendation,
+            rationale=norm_rationale,
+            recommended_at=recommended_at,
+        )
+
+        dispute.status = Dispute.Status.ADMIN_REVIEW
+        dispute.save(update_fields=["status", "updated_at"])
+
+        enqueue_agreement_status_changed(
+            dispute.agreement,
+            correlation_id=eff_correlation_id,
+            causation_id=str(rec.id),
+        )
+
+        record_audit_event(
+            event_type="dispute_recommendation_submitted",
+            organization=dispute.agreement.organization,
+            agreement=dispute.agreement,
+            actor=analyst,
+            correlation_id=eff_correlation_id,
+            payload={
+                "dispute_id": str(dispute.id),
+                "recommendation_id": str(rec.id),
+                "recommendation": recommendation,
+                "command_id": norm_command_id,
+            },
+        )
+        return rec, False
+
+
 def _timestamp(now: datetime | None) -> datetime:
     if now is None:
         return timezone.now()
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     return now
+
